@@ -12,8 +12,6 @@ import Combine
 /// App lifecycle callbacks happen on the main thread; marking this type clarifies actor expectations.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let environment: TabbyAppEnvironment
-
     let permissionManager: PermissionManager
     let runtimeModel: RuntimeBootstrapModel
     let modelDownloadManager: ModelDownloadManager
@@ -27,10 +25,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     override init() {
         // Build the dependency graph once up front so every scene/view observes the same
-        // long-lived objects for the entire app session. The `environment` property keeps
-        // those shared owners alive for the lifetime of the app delegate.
+        // long-lived objects for the entire app session. `TabbyAppEnvironment` is a composition
+        // helper here; the app delegate retains the root objects it needs directly.
         let environment = TabbyAppEnvironment()
-        self.environment = environment
         permissionManager = environment.permissionManager
         runtimeModel = environment.runtimeModel
         modelDownloadManager = environment.modelDownloadManager

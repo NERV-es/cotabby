@@ -41,3 +41,5 @@ final class SuggestionInserter {
         return true
     }
 }
+
+extension SuggestionInserter: SuggestionInserting {}

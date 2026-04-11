@@ -14,7 +14,6 @@ import Foundation
 @MainActor
 final class InputMonitor {
     var onEvent: ((CapturedInputEvent) -> Bool)?
-    var onTapStateChange: ((Bool) -> Void)?
     var onSuppressedSyntheticInput: (() -> Void)?
 
     private let permissionProvider: @MainActor () -> Bool
@@ -53,7 +52,6 @@ final class InputMonitor {
     /// Creates and enables the CGEvent tap only when permissions allow observation.
     private func installTapIfNeeded() {
         guard eventTap == nil else {
-            onTapStateChange?(true)
             return
         }
 
@@ -79,7 +77,6 @@ final class InputMonitor {
             callback: callback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            onTapStateChange?(false)
             return
         }
 
@@ -92,7 +89,6 @@ final class InputMonitor {
         }
 
         CGEvent.tapEnable(tap: tap, enable: true)
-        onTapStateChange?(true)
     }
 
     /// Tears down the event tap and run-loop source to avoid leaking global event observers.
@@ -108,7 +104,6 @@ final class InputMonitor {
         }
 
         eventTap = nil
-        onTapStateChange?(false)
     }
 
     /// Routes each raw keyboard event through suppression, classification, and optional interception.
@@ -175,6 +170,8 @@ final class InputMonitor {
         return CapturedInputEvent(kind: .other, keyCode: keyCode, characters: characters, flags: flags)
     }
 }
+
+extension InputMonitor: SuggestionInputMonitoring {}
 
 private extension CGEvent {
     var unicodeString: String {

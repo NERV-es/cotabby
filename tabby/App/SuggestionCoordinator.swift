@@ -36,15 +36,15 @@ final class SuggestionCoordinator: ObservableObject {
     @Published private(set) var selectedWordCountPreset: SuggestionWordCountPreset = .threeToSeven
     @Published private(set) var selectedPromptMode: SuggestionPromptMode = .guided
 
-    // Core collaborators. The coordinator orchestrates these services but does not own their
-    // lower-level implementation details.
-    private let permissionManager: PermissionManager
-    private let focusModel: FocusTrackingModel
-    private let inputMonitor: InputMonitor
+    // Core collaborators. The coordinator depends on capability-shaped protocols here so its
+    // orchestration logic stays separated from concrete service implementations.
+    private let permissionManager: any SuggestionPermissionProviding
+    private let focusModel: any SuggestionFocusProviding
+    private let inputMonitor: any SuggestionInputMonitoring
     private let overlayController: OverlayController
-    private let suggestionInserter: SuggestionInserter
-    private let suggestionEngine: LlamaSuggestionEngine
-    private let visualContextCoordinator: VisualContextCoordinator
+    private let suggestionInserter: any SuggestionInserting
+    private let suggestionEngine: any SuggestionGenerating
+    private let visualContextCoordinator: any VisualContextCoordinating
     private let interactionState: SuggestionInteractionState
     private let workController: SuggestionWorkController
     private let configuration: SuggestionConfiguration
@@ -61,13 +61,13 @@ final class SuggestionCoordinator: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     init(
-        permissionManager: PermissionManager,
-        focusModel: FocusTrackingModel,
-        inputMonitor: InputMonitor,
+        permissionManager: any SuggestionPermissionProviding,
+        focusModel: any SuggestionFocusProviding,
+        inputMonitor: any SuggestionInputMonitoring,
         overlayController: OverlayController,
-        suggestionInserter: SuggestionInserter,
-        suggestionEngine: LlamaSuggestionEngine,
-        visualContextCoordinator: VisualContextCoordinator,
+        suggestionInserter: any SuggestionInserting,
+        suggestionEngine: any SuggestionGenerating,
+        visualContextCoordinator: any VisualContextCoordinating,
         interactionState: SuggestionInteractionState,
         workController: SuggestionWorkController,
         configuration: SuggestionConfiguration,
@@ -117,19 +117,19 @@ final class SuggestionCoordinator: ObservableObject {
         overlayState = overlayController.state
         latestOverlayMessage = overlayController.state.detail
 
-        focusModel.$snapshot
+        focusModel.snapshotPublisher
             .sink { [weak self] snapshot in
                 self?.handleFocusSnapshotChange(snapshot)
             }
             .store(in: &cancellables)
 
-        permissionManager.$inputMonitoringGranted
+        permissionManager.inputMonitoringGrantedPublisher
             .sink { [weak self] _ in
                 self?.handlePermissionChange()
             }
             .store(in: &cancellables)
 
-        permissionManager.$screenRecordingGranted
+        permissionManager.screenRecordingGrantedPublisher
             .sink { [weak self] _ in
                 self?.handlePermissionChange()
             }

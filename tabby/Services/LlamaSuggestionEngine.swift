@@ -84,3 +84,5 @@ final class LlamaSuggestionEngine {
         return normalized.trimmingCharacters(in: .newlines)
     }
 }
+
+extension LlamaSuggestionEngine: SuggestionGenerating {}

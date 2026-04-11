@@ -174,3 +174,5 @@ final class VisualContextCoordinator {
         onStateChange?(status, latestSummary)
     }
 }
+
+extension VisualContextCoordinator: VisualContextCoordinating {}

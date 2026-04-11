@@ -57,3 +57,15 @@ final class PermissionManager: ObservableObject {
         )
     }
 }
+
+extension PermissionManager: SuggestionPermissionProviding {
+    /// The coordinator subscribes through erased publishers so it can depend on a protocol instead
+    /// of the concrete `@Published` storage details of `PermissionManager`.
+    var inputMonitoringGrantedPublisher: AnyPublisher<Bool, Never> {
+        $inputMonitoringGranted.eraseToAnyPublisher()
+    }
+
+    var screenRecordingGrantedPublisher: AnyPublisher<Bool, Never> {
+        $screenRecordingGranted.eraseToAnyPublisher()
+    }
+}

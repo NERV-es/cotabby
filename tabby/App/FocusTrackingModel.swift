@@ -69,3 +69,11 @@ final class FocusTrackingModel: ObservableObject {
         }
     }
 }
+
+extension FocusTrackingModel: SuggestionFocusProviding {
+    /// Exposing an erased publisher keeps `SuggestionCoordinator` coupled to "a stream of focus
+    /// snapshots" rather than the implementation detail that this model uses `@Published`.
+    var snapshotPublisher: AnyPublisher<FocusSnapshot, Never> {
+        $snapshot.eraseToAnyPublisher()
+    }
+}
