@@ -30,7 +30,8 @@ struct SuggestionOverlayPresenter {
         overlayController.showSuggestion(text, at: caretRect)
 
         switch previousState {
-        case let .visible(previousText, previousCaretRect) where previousText == text && previousCaretRect != caretRect:
+        case .visible(let previousText, let previousCaretRect)
+        where previousText == text && previousCaretRect != caretRect:
             return "Moved ghost text to the latest caret position."
 
         default:
