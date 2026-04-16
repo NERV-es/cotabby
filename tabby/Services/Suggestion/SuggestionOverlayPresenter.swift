@@ -19,21 +19,20 @@ struct SuggestionOverlayPresenter {
 
     /// Shows or repositions ghost text while preserving the previous overlay message when nothing changed.
     func present(text: String, at caretRect: CGRect, previousState: OverlayState) -> String? {
-        guard !text.isEmpty else {
+        let displayText = text.trimmingCharacters(in: .whitespaces).isEmpty ? "" : text
+        guard !displayText.isEmpty else {
             return hide(reason: "Overlay hidden because the suggestion text was empty.")
         }
-        
-        print("SHOW")
 
-        guard previousState != .visible(text: text, caretRect: caretRect) else {
+        guard previousState != .visible(text: displayText, caretRect: caretRect) else {
             return nil
         }
 
-        overlayController.showSuggestion(text, at: caretRect)
+        overlayController.showSuggestion(displayText, at: caretRect)
 
         switch previousState {
         case .visible(let previousText, let previousCaretRect)
-        where previousText == text && previousCaretRect != caretRect:
+        where previousText == displayText && previousCaretRect != caretRect:
             return "Moved ghost text to the latest caret position."
 
         default:
@@ -42,7 +41,6 @@ struct SuggestionOverlayPresenter {
     }
 
     func hide(reason: String) -> String {
-        print("HIDDEN")
         overlayController.hide(reason: reason)
         return reason
     }

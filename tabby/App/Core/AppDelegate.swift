@@ -74,11 +74,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        suggestionCoordinator.$visualContextStatus
-            .sink { [weak self] status in
-                self?.activationIndicatorController.setVisualContextStatus(status)
-            }
-            .store(in: &cancellables)
     }
 
     /// Starts runtime and observer services once AppKit reports that app launch finished.
@@ -101,15 +96,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         runtimeModel.stop()
     }
 
-    /// Mirrors supported-focus state into the small outside-left activation indicator.
+    /// Mirrors supported-focus state into the caret-anchored activation indicator.
     private func updateActivationIndicator(for snapshot: FocusSnapshot) {
         guard case .supported = snapshot.capability,
-              let inputFrameRect = snapshot.context?.inputFrameRect
+              let caretRect = snapshot.context?.caretRect
         else {
             activationIndicatorController.hide(reason: "Activation indicator hidden because the current field is not supported.")
             return
         }
 
-        activationIndicatorController.show(at: inputFrameRect)
+        activationIndicatorController.show(at: caretRect)
     }
 }

@@ -25,11 +25,7 @@ struct CapturedInputEvent: Equatable {
 
     var shouldSchedulePrediction: Bool {
         switch kind {
-        case .textMutation:
-            // Tabby generates after a completed word boundary, not on every character,
-            // to avoid prompting from half-typed fragments.
-            return keyCode == 49 || characters.hasTrailingSpaceBoundary
-        case .shortcutMutation:
+        case .textMutation, .shortcutMutation:
             return true
         default:
             return false
@@ -46,13 +42,3 @@ struct CapturedInputEvent: Equatable {
     }
 }
 
-private extension String {
-    /// Space-delimited triggering avoids sampling half-typed words like "I w".
-    var hasTrailingSpaceBoundary: Bool {
-        guard let lastScalar = unicodeScalars.last else {
-            return false
-        }
-
-        return CharacterSet.whitespaces.contains(lastScalar)
-    }
-}

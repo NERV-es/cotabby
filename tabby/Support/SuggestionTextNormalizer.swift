@@ -48,6 +48,18 @@ enum SuggestionTextNormalizer {
             return ""
         }
 
-        return normalized.trimmingCharacters(in: .newlines)
+        normalized = normalized.trimmingCharacters(in: .newlines)
+
+        // Deterministic space management: the user owns the word boundary, not the model.
+        // If the preceding text already ends with whitespace, strip any leading whitespace
+        // the model added to prevent double-spacing. If it doesn't, the model's leading
+        // space (or lack of one) passes through untouched — it's either a correct mid-word
+        // completion or a natural word break the model chose.
+        if let lastScalar = request.context.precedingText.unicodeScalars.last,
+           CharacterSet.whitespaces.contains(lastScalar) {
+            normalized = String(normalized.drop(while: { $0.isWhitespace }))
+        }
+
+        return normalized
     }
 }

@@ -3,19 +3,19 @@ import Foundation
 import SwiftUI
 
 /// File overview:
-/// Owns the tiny non-activating panel that marks supported inputs with a subtle Tabby icon.
-/// Unlike the ghost-text overlay, this controller is focus-driven and anchors to the full input frame.
+/// Owns the tiny non-activating panel that marks supported inputs with a subtle caret anchor.
+/// Unlike the ghost-text overlay, this controller is focus-driven and anchors to the resolved caret
+/// instead of the full input frame.
 ///
 /// Keeping this as a separate controller preserves the architectural split between:
 /// supported-field affordances and suggestion-specific UI.
 @MainActor
 final class ActivationIndicatorController {
-    private let horizontalGap: CGFloat = 6
+    private let verticalGap: CGFloat = 2
     private let screenInset: CGFloat = 2
-    private var indicatorMode: ActivationIndicatorMode = .idle
 
     private lazy var contentView: NSHostingView<ActivationIndicatorView> = {
-        NSHostingView(rootView: ActivationIndicatorView(mode: indicatorMode))
+        NSHostingView(rootView: ActivationIndicatorView())
     }()
 
     private lazy var panel: ActivationIndicatorPanel = {
@@ -36,77 +36,76 @@ final class ActivationIndicatorController {
         return panel
     }()
 
-    private var lastInputFrameRect: CGRect?
+    private var lastCaretRect: CGRect?
 
-    /// Mirrors the visual-context pipeline stage into the indicator icon.
-    /// This is intentionally stateful because async stage transitions can arrive out of order
-    /// relative to focus updates; keeping one canonical mode here gives us last-write-wins behavior.
-    func setVisualContextStatus(_ status: VisualContextStatus) {
-        let nextMode = ActivationIndicatorMode(status: status)
-        guard indicatorMode != nextMode else {
-            return
-        }
-
-        indicatorMode = nextMode
-        contentView.rootView = ActivationIndicatorView(mode: nextMode)
-    }
-
-    /// Sizes and positions the activation icon just outside the left edge of the supported input.
-    func show(at inputFrameRect: CGRect) {
-        guard !inputFrameRect.isEmpty else {
-            hide(reason: "Activation indicator hidden because the input frame was empty.")
+    /// Sizes and positions the activation icon above the resolved caret.
+    ///
+    /// This is deliberately caret-based rather than field-based. The old outside-left placement
+    /// proved too disconnected from the user's insertion point, especially in large editors.
+    /// Anchoring to the caret makes the affordance feel attached to the text flow itself.
+    func show(at caretRect: CGRect) {
+        guard !caretRect.isEmpty else {
+            hide(reason: "Activation indicator hidden because the caret rect was empty.")
             return
         }
 
         contentView.layoutSubtreeIfNeeded()
         let contentSize = contentView.fittingSize
         let frame = CGRect(
-            origin: origin(for: inputFrameRect, contentSize: contentSize),
+            origin: origin(for: caretRect, contentSize: contentSize),
             size: contentSize
         ).integral
 
-        if lastInputFrameRect == inputFrameRect, panel.frame == frame, panel.isVisible {
+        if lastCaretRect == caretRect, panel.frame == frame, panel.isVisible {
             return
         }
 
         panel.setFrame(frame, display: true)
         panel.orderFrontRegardless()
-        lastInputFrameRect = inputFrameRect
+        lastCaretRect = caretRect
     }
 
     /// Hides the indicator when Tabby is not actively supporting the current field.
     func hide(reason _: String) {
         panel.orderOut(nil)
-        lastInputFrameRect = nil
+        lastCaretRect = nil
     }
 
-    /// Anchors the icon outside-left and vertically centered, then clamps to the visible screen.
-    private func origin(for inputFrameRect: CGRect, contentSize: CGSize) -> CGPoint {
-        let proposedOrigin = CGPoint(
-            x: inputFrameRect.minX - contentSize.width - horizontalGap,
-            y: inputFrameRect.midY - (contentSize.height / 2)
-        )
+    /// Centers the indicator horizontally on the caret and prefers placing it just below the
+    /// current line box. If the caret is too close to the bottom edge of the visible screen,
+    /// we fall back above the line instead.
+    private func origin(for caretRect: CGRect, contentSize: CGSize) -> CGPoint {
+        let centeredX = caretRect.midX - (contentSize.width / 2)
+        let preferredBelowY = caretRect.minY - contentSize.height - verticalGap
 
-        guard let screen = screen(for: inputFrameRect) else {
-            return proposedOrigin
+        guard let screen = screen(for: caretRect) else {
+            return CGPoint(x: centeredX, y: preferredBelowY)
         }
 
         let visibleFrame = screen.visibleFrame
+        let fallbackAboveY = caretRect.maxY + verticalGap
+        let preferredY: CGFloat
+        if preferredBelowY >= visibleFrame.minY + screenInset {
+            preferredY = preferredBelowY
+        } else {
+            preferredY = fallbackAboveY
+        }
+
         let clampedX = min(
-            max(proposedOrigin.x, visibleFrame.minX + screenInset),
+            max(centeredX, visibleFrame.minX + screenInset),
             visibleFrame.maxX - contentSize.width - screenInset
         )
         let clampedY = min(
-            max(proposedOrigin.y, visibleFrame.minY + screenInset),
+            max(preferredY, visibleFrame.minY + screenInset),
             visibleFrame.maxY - contentSize.height - screenInset
         )
 
         return CGPoint(x: clampedX, y: clampedY)
     }
 
-    /// Chooses the screen that currently contains the center of the input field.
-    private func screen(for inputFrameRect: CGRect) -> NSScreen? {
-        let midpoint = CGPoint(x: inputFrameRect.midX, y: inputFrameRect.midY)
+    /// Chooses the screen that currently contains the caret's center point.
+    private func screen(for caretRect: CGRect) -> NSScreen? {
+        let midpoint = CGPoint(x: caretRect.midX, y: caretRect.midY)
 
         if let containingScreen = NSScreen.screens.first(where: {
             $0.visibleFrame.contains(midpoint)
@@ -114,7 +113,7 @@ final class ActivationIndicatorController {
             return containingScreen
         }
 
-        return NSScreen.screens.first(where: { $0.frame.intersects(inputFrameRect) })
+        return NSScreen.screens.first(where: { $0.frame.intersects(caretRect) })
     }
 }
 
@@ -123,87 +122,58 @@ private final class ActivationIndicatorPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-private enum ActivationIndicatorMode: Equatable {
-    case idle
-    case capturing
-    case extractingText
-    case ready
-    case unavailable
-    case failed
+private struct ActivationIndicatorView: View {
+    @Environment(\.colorScheme) private var colorScheme
 
-    init(status: VisualContextStatus) {
-        switch status {
-        case .idle:
-            self = .idle
-        case .capturing:
-            self = .capturing
-        case .extractingText:
-            self = .extractingText
-        case .ready:
-            self = .ready
-        case .unavailable:
-            self = .unavailable
-        case .failed:
-            self = .failed
-        }
+    private var bgColor: Color {
+        colorScheme == .dark ? Color(white: 0.18) : Color(white: 0.95)
     }
 
-    var symbolName: String {
-        switch self {
-        case .capturing:
-            return "camera.fill"
-        case .extractingText:
-            return "magnifyingglass"
-        case .unavailable:
-            return "camera"
-        case .failed:
-            return "exclamationmark.triangle.fill"
-        case .idle, .ready:
-            return "pawprint.fill"
-        }
-    }
-
-    var backgroundColor: Color {
-        switch self {
-        case .capturing:
-            return Color.orange.opacity(0.86)
-        case .extractingText:
-            return Color.blue.opacity(0.86)
-        case .unavailable:
-            return Color.orange.opacity(0.86)
-        case .failed:
-            return Color.red.opacity(0.86)
-        case .idle, .ready:
-            return Color.black.opacity(0.78)
-        }
-    }
-
-    var symbolColor: Color {
-        Color.white.opacity(0.95)
+    var body: some View {
+        CaretPointerTriangle(cornerRadius: 1.5)
+            .fill(bgColor)
+            .frame(width: 8, height: 5)
+            .shadow(color: .black.opacity(0.16), radius: 1, y: 1)
+            .fixedSize()
     }
 }
 
-private struct ActivationIndicatorView: View {
-    let mode: ActivationIndicatorMode
+/// A small upward triangle reads as a pointer to the insertion point when it sits below the line.
+/// Rounded corners make it feel softer and visually closer to the ghost keycap styling.
+private struct CaretPointerTriangle: Shape {
+    let cornerRadius: CGFloat
 
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(mode.backgroundColor)
+    func path(in rect: CGRect) -> Path {
+        let radius = min(cornerRadius, rect.width * 0.2, rect.height * 0.35)
+        let apex = CGPoint(x: rect.midX, y: rect.minY)
+        let right = CGPoint(x: rect.maxX, y: rect.maxY)
+        let left = CGPoint(x: rect.minX, y: rect.maxY)
 
-            Image(systemName: mode.symbolName)
-                .symbolRenderingMode(.monochrome)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(mode.symbolColor)
+        func insetPoint(from corner: CGPoint, toward other: CGPoint, by distance: CGFloat) -> CGPoint {
+            let dx = other.x - corner.x
+            let dy = other.y - corner.y
+            let length = max(sqrt(dx * dx + dy * dy), 0.0001)
+            return CGPoint(
+                x: corner.x + (dx / length) * distance,
+                y: corner.y + (dy / length) * distance
+            )
         }
-        .frame(width: 22, height: 22)
-        .overlay(
-            Circle()
-                .stroke(Color.white.opacity(0.18), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.15), radius: 2, y: 1)
-        .opacity(0.85)
-        .padding(2)
-        .fixedSize()
+
+        let apexRight = insetPoint(from: apex, toward: right, by: radius)
+        let apexLeft = insetPoint(from: apex, toward: left, by: radius)
+        let rightTop = insetPoint(from: right, toward: apex, by: radius)
+        let rightBottom = insetPoint(from: right, toward: left, by: radius)
+        let leftBottom = insetPoint(from: left, toward: right, by: radius)
+        let leftTop = insetPoint(from: left, toward: apex, by: radius)
+
+        var path = Path()
+        path.move(to: apexRight)
+        path.addQuadCurve(to: apexLeft, control: apex)
+        path.addLine(to: leftTop)
+        path.addQuadCurve(to: leftBottom, control: left)
+        path.addLine(to: rightBottom)
+        path.addQuadCurve(to: rightTop, control: right)
+        path.closeSubpath()
+        return path
     }
 }

@@ -52,15 +52,13 @@ extension SuggestionCoordinator {
         }
 
         guard SuggestionRequestFactory.shouldGenerateSuggestion(for: rawContext.precedingText) else {
-            print("[PIPE] ❌ shouldGenerate=false, precedingText ends with: \"\(rawContext.precedingText.suffix(10))\"")
             clearSuggestion()
-            hideOverlay(reason: "Overlay hidden because suggestions wait for a completed word boundary (space).")
+            hideOverlay(reason: "Overlay hidden because the field has no typed text yet.")
             state = .idle
             return
         }
 
         let context = interactionState.materializeContext(from: rawContext)
-        print("[PIPE] ✅ generating, gen=\(context.generation), sig=\(rawContext.contentSignature.prefix(40))")
         let visualContextText = settingsSnapshot.effectivePromptMode.usesVisualContext
             ? visualContextCoordinator.excerpt(for: context)
             : nil
@@ -111,9 +109,9 @@ extension SuggestionCoordinator {
 
     /// Promotes a generated result to `ready` only when it is still fresh for the current field.
     func apply(result: SuggestionResult, workID: UInt64) async {
-        print("[PIPE] apply() entered, result.gen=\(result.generation), text=\"\(result.text.prefix(30))\"")
+
         guard workController.isCurrent(workID) else {
-            print("[PIPE] ❌ apply: workID stale")
+
             return
         }
 
@@ -124,23 +122,23 @@ extension SuggestionCoordinator {
             inputMonitoringGranted: permissionManager.inputMonitoringGranted,
             focusSnapshot: snapshot
         ) {
-            print("[PIPE] ❌ apply: disabled — \(disabledReason)")
+
             disablePredictions(reason: disabledReason)
             return
         }
 
         guard let rawContext = snapshot.context else {
-            print("[PIPE] ❌ apply: no rawContext — \(snapshot.capability.summary)")
+
             disablePredictions(reason: snapshot.capability.summary)
             return
         }
 
         let liveContext = interactionState.materializeContext(from: rawContext)
-        print("[PIPE] apply: result.gen=\(result.generation) live.gen=\(liveContext.generation) sig=\(rawContext.contentSignature.prefix(40))")
+
         // Generation numbers are our stale-result guard. If the text changed while the model was
         // thinking, we drop the answer instead of showing a suggestion for old content.
         guard liveContext.generation == result.generation else {
-            print("[PIPE] ❌ STALE DROP result.gen=\(result.generation) != live.gen=\(liveContext.generation)")
+
             latestRawModelOutput = SuggestionDebugLogger.debugPreview(result.rawText)
             logStage(
                 "stale-drop",
@@ -195,7 +193,7 @@ extension SuggestionCoordinator {
         )
         applySessionDiagnostics(session, acceptanceAction: "Generated new suggestion.")
         state = .ready(text: session.remainingText, latency: session.latency)
-        print("[PIPE] ✅ PRESENTING: \"\(session.remainingText.prefix(30))\" at caret=\(liveContext.caretRect)")
+
         presentOverlay(text: session.remainingText, at: liveContext.caretRect)
         logStage(
             "ready",

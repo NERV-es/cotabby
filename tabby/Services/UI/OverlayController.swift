@@ -82,35 +82,37 @@ private final class OverlayPanel: NSPanel {
 private struct GhostSuggestionView: View {
     @Environment(\.colorScheme) var colorScheme
     let text: String
-    
-    
+
     var ghostColor: Color {
-        colorScheme  == .dark ?  Color(red: 0.65, green: 0.65, blue: 0.65) : Color(red:0.45, green: 0.45, blue:0.45)
+        colorScheme == .dark
+            ? Color(red: 0.65, green: 0.65, blue: 0.65)
+            : Color(red: 0.45, green: 0.45, blue: 0.45)
     }
+
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(text)
                 .font(.system(size: 14))
                 .foregroundStyle(ghostColor)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: true)
 
-            GhostKeycap(label: "Tab")
+            GhostTabKeycap()
         }
         .fixedSize(horizontal: true, vertical: true)
     }
 }
 
-/// Visual hint that teaches the user how to accept the suggestion.
-private struct GhostKeycap: View {
-    let label: String
+/// Visual hint that teaches the user which key accepts the suggestion.
+/// We intentionally render only the tab glyph now; the explicit "Tab" label took too much visual
+/// weight for an inline hint that should stay secondary to the suggestion itself.
+private struct GhostTabKeycap: View {
     @Environment(\.colorScheme) var colorScheme
 
-    // 1. Explicit colors to prevent alpha-blending bugs in transparent windows
     var textColor: Color {
         colorScheme == .dark ? Color(white: 0.65) : Color(white: 0.45)
     }
-    
+
     var bgColor: Color {
         colorScheme == .dark ? Color(white: 0.18) : Color(white: 0.95)
     }
@@ -120,31 +122,25 @@ private struct GhostKeycap: View {
     }
 
     var body: some View {
-        // 2. Added HStack to incorporate the native symbol
-        HStack(spacing: 3) {
-            if label.lowercased() == "tab" {
-                Text("⇥")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-            }
-            Text(label)
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-        }
-        .foregroundStyle(textColor)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(bgColor)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(borderColor, lineWidth: 1)
-        )
-        // 3. Micro-shadow to lift the pill off the text editor background
-        .shadow(
-            color: Color.black.opacity(colorScheme == .dark ? 0.4 : 0.08),
-            radius: 1, x: 0, y: 1
-        )
-        .fixedSize(horizontal: true, vertical: true)
+        Text("⇥")
+            .font(.system(size: 10, weight: .medium, design: .rounded))
+            .foregroundStyle(textColor)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(bgColor)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(borderColor, lineWidth: 1)
+            )
+            .shadow(
+                color: Color.black.opacity(colorScheme == .dark ? 0.4 : 0.08),
+                radius: 1,
+                x: 0,
+                y: 1
+            )
+            .fixedSize(horizontal: true, vertical: true)
     }
 }

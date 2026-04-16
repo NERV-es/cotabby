@@ -57,11 +57,11 @@
          </CommandLineArgument>
          <CommandLineArgument
             argument = "-tabby-debug-caret-overlay"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </CommandLineArgument>
          <CommandLineArgument
             argument = "-tabby-log-focus-geometry"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </CommandLineArgument>
       </CommandLineArguments>
    </LaunchAction>

@@ -4,7 +4,7 @@ import Foundation
 
 /// File overview:
 /// Resolves caret and input-frame geometry from AX elements. This file centralizes the fragile
-/// browser/native heuristics used to place overlays and activation indicators correctly.
+/// browser/native heuristics used to place overlays, caret badges, and screenshot crops correctly.
 ///
 /// Separating geometry heuristics from `FocusTracker` makes compatibility bugs easier to reason
 /// about: if the wrong element is selected, the resolver layer is at fault; if the right element
@@ -35,9 +35,9 @@ struct CaretGeometryResult {
 
 @MainActor
 struct AXTextGeometryResolver {
-    /// Resolves the full input frame that the activation indicator uses as its visual anchor.
-    /// This is intentionally separate from caret resolution because the indicator tracks field
-    /// support, not the exact text insertion point.
+    /// Resolves the full input frame for workflows that need the whole field bounds, such as
+    /// screenshot cropping and field-level diagnostics. This stays separate from caret resolution
+    /// because not every consumer wants the same geometry contract.
     func resolveInputFrameRect(for element: AXUIElement) -> CGRect? {
         guard let frame = AXHelper.rectValue(for: "AXFrame" as CFString, on: element), !frame.isEmpty else {
             return nil

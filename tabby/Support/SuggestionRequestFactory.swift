@@ -17,18 +17,12 @@ struct SuggestionRequestBuildResult: Equatable, Sendable {
 /// Pure prompt-policy surface for the autocomplete pipeline.
 /// This type has no access to UserDefaults, tasks, overlays, or runtime services.
 enum SuggestionRequestFactory {
-    /// Require completed word boundaries so prompts do not include half-typed trailing tokens.
+    /// Require at least one non-whitespace character so we don't suggest on a blank field.
+    /// No trailing-space gate — the debounce handles rapid keystroke settling, and
+    /// `SuggestionTextNormalizer` applies deterministic space management on the output side.
     static func shouldGenerateSuggestion(for precedingText: String) -> Bool {
         let trimmed = precedingText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return false
-        }
-
-        guard let trailingScalar = precedingText.unicodeScalars.last else {
-            return false
-        }
-
-        return CharacterSet.whitespaces.contains(trailingScalar)
+        return !trimmed.isEmpty
     }
 
     /// Builds the generation request plus the exact prompt preview used by Tabby's diagnostics UI.
