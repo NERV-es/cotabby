@@ -188,22 +188,12 @@ struct AXTextGeometryResolver {
         parentSelection: NSRange,
         parentText: String
     ) -> CaretGeometryResult? {
-        let children = AXHelper.childElements(of: element)
-        guard !children.isEmpty else { return nil }
-
-        // Collect AXStaticText children with text and frames.
-        var textRuns: [(text: String, frame: CGRect)] = []
-        for child in children {
-            let role = AXHelper.stringValue(for: kAXRoleAttribute as CFString, on: child)
-            guard role == kAXStaticTextRole as String else { continue }
-            guard let text = AXHelper.stringValue(for: kAXValueAttribute as CFString, on: child),
-                !text.isEmpty
-            else { continue }
-            guard let frame = AXHelper.rectValue(for: "AXFrame" as CFString, on: child),
-                !frame.isEmpty
-            else { continue }
-            textRuns.append((text, frame))
+        let parentTextLength = (parentText as NSString).length
+        guard parentSelection.location <= parentTextLength else {
+            return nil
         }
+
+        let textRuns = collectStaticTextRuns(from: element)
 
         guard !textRuns.isEmpty else { return nil }
 
@@ -247,6 +237,54 @@ struct AXTextGeometryResolver {
             quality: .derived,
             observedCharWidth: charWidth
         )
+    }
+
+    /// Chromium-based editors sometimes nest text runs under intermediary wrappers (`AXGroup`,
+    /// anonymous containers, etc.). Walking only one child level misses those runs and forces
+    /// Branch 3 (`AXFrame`) fallback. We scan descendants in pre-order so cumulative text length
+    /// still tracks visual reading order in most editor trees.
+    private func collectStaticTextRuns(from root: AXUIElement) -> [(text: String, frame: CGRect)] {
+        let maxDepth = 8
+        let maxNodes = 300
+        var visitedNodes = 0
+        var seen = Set<String>()
+        var runs: [(text: String, frame: CGRect)] = []
+
+        func walk(_ element: AXUIElement, depth: Int) {
+            guard depth <= maxDepth, visitedNodes < maxNodes else {
+                return
+            }
+
+            let identity = AXHelper.elementIdentity(for: element)
+            guard seen.insert(identity).inserted else {
+                return
+            }
+
+            visitedNodes += 1
+
+            let role = AXHelper.stringValue(for: kAXRoleAttribute as CFString, on: element)
+            if role == kAXStaticTextRole as String,
+               let text = AXHelper.stringValue(for: kAXValueAttribute as CFString, on: element),
+               !text.isEmpty,
+               let frame = AXHelper.rectValue(for: "AXFrame" as CFString, on: element),
+               !frame.isEmpty {
+                runs.append((text, frame))
+            }
+
+            guard depth < maxDepth else {
+                return
+            }
+
+            for child in AXHelper.childElements(of: element) {
+                walk(child, depth: depth + 1)
+            }
+        }
+
+        for child in AXHelper.childElements(of: root) {
+            walk(child, depth: 1)
+        }
+
+        return runs
     }
 
     /// Some browser-based editors return a full line fragment for a zero-length range instead of

@@ -113,8 +113,9 @@ struct FocusSnapshotResolver {
             caretSource = "\(resolvedCandidate.caretQuality!.label) primary"
             caretQuality = resolvedCandidate.caretQuality!
             observedCharWidth = resolvedCandidate.observedCharWidth
-        } else if let deepResult = findDeepGeometrySource(
-            from: focusedElement,
+        } else if let deepResult = resolveDeepGeometrySource(
+            focusedElement: focusedElement,
+            resolvedElement: resolvedCandidate.element,
             cocoaAnchorFrame: resolvedCandidate.inputFrameRect
         ) {
             caretRect = deepResult.rect
@@ -231,6 +232,30 @@ struct FocusSnapshotResolver {
         }
 
         return ordered
+    }
+
+    /// Runs deep geometry search from the resolved editable candidate first, then falls back to
+    /// the raw focused node when those are different branches of the same local AX neighborhood.
+    private func resolveDeepGeometrySource(
+        focusedElement: AXUIElement,
+        resolvedElement: AXUIElement,
+        cocoaAnchorFrame: CGRect?
+    ) -> CaretGeometryResult? {
+        if let result = findDeepGeometrySource(
+            from: resolvedElement,
+            cocoaAnchorFrame: cocoaAnchorFrame
+        ) {
+            return result
+        }
+
+        guard AXHelper.elementIdentity(for: focusedElement) != AXHelper.elementIdentity(for: resolvedElement) else {
+            return nil
+        }
+
+        return findDeepGeometrySource(
+            from: focusedElement,
+            cocoaAnchorFrame: cocoaAnchorFrame
+        )
     }
 
     /// Searches deeper descendants of the focused element for a node with precise caret geometry.
@@ -372,6 +397,7 @@ struct FocusSnapshotResolver {
         )
 
         return AXFocusCandidate(
+            element: element,
             elementIdentifier: elementIdentifier,
             role: role,
             subrole: subrole,
@@ -503,6 +529,7 @@ struct FocusSnapshotResolver {
 /// AX data read from one candidate element near the current focus.
 /// This keeps candidate search state local to the resolver instead of leaking it into the tracker.
 private struct AXFocusCandidate {
+    let element: AXUIElement
     let elementIdentifier: String
     let role: String
     let subrole: String?

@@ -365,3 +365,104 @@ Each layer has a single responsibility:
 - **AXHelper** owns raw AX calls. It doesn't know about caret placement strategy.
 
 When caret placement breaks in a new app, you debug in `AXTextGeometryResolver`. When the wrong element is selected, you debug in `FocusSnapshotResolver`. When coordinates are wrong, you debug in `AXHelper`. The separation makes compatibility bugs tractable.
+
+---
+
+## Regression Postmortem (April 2026): Stuck on `estimated primary-fallback`
+
+### Symptom
+
+In failing editors, the debug badge stayed on:
+
+`estimated primary-fallback | AXTextArea`
+
+even when the AX tree clearly contained deeper text-run nodes that should have produced `derived` geometry.
+
+### Why This Regressed
+
+This incident came from two independent assumptions failing at the same time:
+
+1. **Neighborhood selection and deep-search root were mismatched**
+    `FocusSnapshotResolver` selected candidates from a neighborhood (focused node, ancestors, and ancestor children), but deep geometry BFS was rooted only at the focused node.
+
+    Result: the chosen editable candidate could be in a sibling branch that deep BFS could not reach.
+
+2. **Branch 2.5 assumed text runs were immediate children**
+    `resolveCaretFromChildTextRuns` initially scanned only one child level for `AXStaticText` runs.
+
+    Result: editors with wrapper-heavy AX trees (`AXGroup` / container nodes) exposed real runs deeper in the tree, so Branch 2.5 never triggered and Branch 3 (`AXFrame` estimate) won.
+
+### What Fixed It
+
+1. **Deep search now starts from the resolved candidate first**
+    - Added a routing helper that tries deep search from the resolved editable element.
+    - Falls back to focused-element root only when needed.
+
+2. **Candidate now stores concrete AX element identity**
+    - `AXFocusCandidate` now carries the real `AXUIElement`, not just a string identifier.
+    - This allows deep search to root at the exact resolved branch.
+
+3. **Branch 2.5 now scans descendant text runs**
+    - Added descendant traversal for `AXStaticText` runs with depth/node caps.
+    - Preserves cumulative UTF-16 matching behavior while covering nested wrapper trees.
+
+### Engineering Lessons
+
+1. **Root-of-traversal bugs can mimic geometry bugs**
+    If traversal starts from the wrong branch, perfect geometry logic still looks broken.
+
+2. **AX trees are eventually consistent under polling**
+    Focus, selection, and child structure can update on different ticks. Treat each poll as a snapshot with possible staleness, not a globally consistent transaction.
+
+3. **Fallback quality labels are observability, not just UI**
+    Seeing `estimated primary-fallback` repeatedly is a signal that traversal or branch eligibility failed, not necessarily that coordinate conversion failed.
+
+4. **Depth assumptions are compatibility assumptions**
+    "Immediate children" works in simple trees but silently fails in modern browser/editor accessibility trees.
+
+### Challenges We Hit
+
+1. **False confidence from partial fixes**
+    Fixing deep-search root improved one topology but did not solve nested-run topologies.
+
+2. **Tree-shape variance across host apps**
+    Some apps put text runs under `AXTextArea` directly; others add multiple wrapper layers.
+
+3. **Debugging under asynchronous UI updates**
+    Timing differences between selection publication and child-tree publication can temporarily hide the path that exists a few milliseconds later.
+
+### Recurrence Runbook
+
+If this ever happens again, follow this order:
+
+1. **Read the quality/source badge first**
+    If you see `estimated primary-fallback`, treat it as branch-selection/traversal failure until proven otherwise.
+
+2. **Dump focused + resolved branch topology**
+    Confirm whether resolved candidate and focused node are on different branches of a shared ancestor.
+
+3. **Verify deep-search root and reachability**
+    Ensure deep traversal starts from resolved candidate before focused fallback.
+
+4. **Count discovered text runs in Branch 2.5**
+    If run count is zero in a field with visible text, traversal depth/source is still wrong.
+
+5. **Validate selection-to-text invariants**
+    Ensure `selection.location <= (parentText as NSString).length` and use UTF-16 everywhere for offsets.
+
+6. **Only then tune heuristics/caps**
+    Increase `maxDepth`/`maxNodes` only after proving root and traversal shape are correct.
+
+### Suggested Guardrails
+
+1. Keep a temporary debug counter for:
+    - deep-search root used (`resolved` vs `focused`)
+    - descendant text-run count
+    - winning branch (`exact`, `derived`, `estimated`)
+
+2. Keep a small manual smoke matrix for release checks:
+    - native editor (TextEdit/Notes)
+    - Chromium simple input
+    - Chromium rich editor with wrapper-heavy tree
+
+3. When refactoring candidate selection or deep traversal, treat them as a coupled system and review together.
