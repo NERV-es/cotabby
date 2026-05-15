@@ -34,12 +34,22 @@ final class PermissionGuidanceController {
         }
     }
 
-    /// Public entry point used by onboarding buttons.
+    /// Public entry point used by onboarding and menu-bar permission buttons.
     ///
     /// The controller chooses the appropriate experience based on the permission's metadata. That
     /// keeps the view layer simple: onboarding asks for help with a permission, and this type
     /// decides whether that means a rich guided overlay or a plain Settings deep link.
     func requestAccess(for permission: TabbyPermissionKind, sourceFrameInScreen: CGRect? = nil) {
+        permissionManager.refresh()
+        guard !permissionManager.isGranted(permission) else {
+            return
+        }
+
+        permissionManager.requestSystemAccess(for: permission)
+        guard !permissionManager.isGranted(permission) else {
+            return
+        }
+
         switch permission.guidanceStyle {
         case .guidedOverlay:
             presentGuidance(for: permission, sourceFrameInScreen: sourceFrameInScreen)

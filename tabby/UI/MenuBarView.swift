@@ -17,6 +17,7 @@ struct MenuBarView: View {
     @ObservedObject var runtimeModel: RuntimeBootstrapModel
     @ObservedObject var modelDownloadManager: ModelDownloadManager
     @ObservedObject var focusModel: FocusTrackingModel
+    let permissionGuidanceController: PermissionGuidanceController
     @ObservedObject var suggestionSettings: SuggestionSettingsModel
     @ObservedObject var foundationModelAvailabilityService: FoundationModelAvailabilityService
     @ObservedObject var suggestionCoordinator: SuggestionCoordinator
@@ -32,7 +33,16 @@ struct MenuBarView: View {
         }
         .padding(16)
         .frame(width: 340)
+        .background(
+            MenuBarPresentationObserver {
+                permissionManager.refresh()
+            }
+        )
         .onAppear {
+            // The menu is a status surface, so re-read system permissions whenever it opens.
+            // The background poll eventually catches changes too, but this avoids showing stale
+            // "Grant" rows after the user just updated System Settings.
+            permissionManager.refresh()
             refreshAppleIntelligenceAvailabilityIfNeeded()
         }
         .onChange(of: suggestionSettings.selectedEngine) { _, _ in
@@ -163,7 +173,12 @@ struct MenuBarView: View {
                     PermissionRow(
                         title: permission.title,
                         granted: permissionManager.isGranted(permission),
-                        action: { permissionManager.openSettings(for: permission) }
+                        action: { sourceFrameInScreen in
+                            permissionGuidanceController.requestAccess(
+                                for: permission,
+                                sourceFrameInScreen: sourceFrameInScreen
+                            )
+                        }
                     )
                 }
             }
