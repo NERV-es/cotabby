@@ -12,7 +12,6 @@ import Foundation
 /// User-facing presets that bound how long one inline suggestion may be.
 /// Treating this as an enum keeps the UI and prompt policy in one source of truth.
 enum SuggestionWordCountPreset: String, CaseIterable, Equatable, Hashable, Sendable, Identifiable {
-    case oneToThree = "1-3"
     case threeToSeven = "3-7"
     case sevenToTwelve = "7-12"
     case twelveToTwenty = "12-20"
@@ -31,8 +30,6 @@ enum SuggestionWordCountPreset: String, CaseIterable, Equatable, Hashable, Senda
 
     var promptInstruction: String {
         switch self {
-        case .oneToThree:
-            return "Return only the next 1 to 3 words."
         case .threeToSeven:
             return "Return only the next 3 to 7 words."
         case .sevenToTwelve:
@@ -46,8 +43,6 @@ enum SuggestionWordCountPreset: String, CaseIterable, Equatable, Hashable, Senda
     /// while leaving room for multi-token words (contractions, proper nouns, punctuation).
     var suggestedPredictionTokenBudget: Int {
         switch self {
-        case .oneToThree:
-            return 5
         case .threeToSeven:
             return 11
         case .sevenToTwelve:
@@ -58,37 +53,11 @@ enum SuggestionWordCountPreset: String, CaseIterable, Equatable, Hashable, Senda
     }
 }
 
-/// User-facing indicator display mode for supported text fields.
-/// This replaces the old caret-indicator boolean so Tabby can express multiple affordances
-/// without smuggling extra meaning through one toggle.
-enum ActivationIndicatorMode: String, CaseIterable, Equatable, Hashable, Sendable, Identifiable {
+/// Persisted indicator mode values. Only `hidden` and `fieldEdgeIcon` are active;
+/// the enum exists so UserDefaults round-trips through a stable raw value.
+enum ActivationIndicatorMode: String, Equatable, Hashable, Sendable {
     case hidden
-    case caretAnchor
     case fieldEdgeIcon
-
-    var id: String { rawValue }
-
-    var displayLabel: String {
-        switch self {
-        case .hidden:
-            return "None"
-        case .caretAnchor:
-            return "Caret"
-        case .fieldEdgeIcon:
-            return "Tabby Icon"
-        }
-    }
-
-    var compactLabel: String {
-        switch self {
-        case .hidden:
-            return "None"
-        case .caretAnchor:
-            return "Caret"
-        case .fieldEdgeIcon:
-            return "Tabby"
-        }
-    }
 }
 
 /// Runtime knobs for the inline-completion pipeline.
@@ -121,9 +90,9 @@ struct SuggestionConfiguration: Equatable, Sendable {
     static let standard = SuggestionConfiguration(
         // Keep completions short so ghost text stays fast and easy to accept.
         maxPredictionTokens: 8,
-        // Many host apps do not publish updated AX text/caret state in the same frame as typing.
-        // A slightly slower debounce gives the model fresher context and avoids obvious staleness.
-        debounceMilliseconds: 180,
+        // Aggressive debounce: 50ms is enough for most apps to publish AX state. The KV cache
+        // reuse path handles prefix changes gracefully if AX is occasionally one char stale.
+        debounceMilliseconds: 50,
         // Low temperature keeps inline completions stable and less likely to drift.
         temperature: 0.1,
         topK: 20,

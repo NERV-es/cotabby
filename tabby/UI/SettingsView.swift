@@ -76,7 +76,7 @@ struct SettingsView: View {
         } message: {
             Text(
                 // swiftlint:disable:next line_length
-                "This removes Tabby's local settings, downloaded models, caches, and login item registration, then moves the app to the Trash. macOS privacy permissions must still be removed from System Settings."
+                "This removes tabby's local settings, downloaded models, caches, and login item registration, then moves the app to the Trash. macOS privacy permissions must still be removed from System Settings."
             )
         }
         .alert("Uninstall Failed", isPresented: uninstallFailureAlertBinding) {
@@ -141,12 +141,7 @@ struct SettingsView: View {
 
             Toggle("Include Clipboard Context", isOn: clipboardContextEnabledBinding)
 
-            Picker("Indicator", selection: selectedIndicatorModeBinding) {
-                ForEach(ActivationIndicatorMode.allCases) { mode in
-                    Text(mode.displayLabel)
-                        .tag(mode)
-                }
-            }
+            Toggle("Show Indicator", isOn: showIndicatorBinding)
 
             // TODO: Re-enable ghost text color customization once the inline overlay is stable.
             // LabeledContent("Ghost Text Color") {
@@ -501,12 +496,10 @@ struct SettingsView: View {
         )
     }
 
-    private var selectedIndicatorModeBinding: Binding<ActivationIndicatorMode> {
+    private var showIndicatorBinding: Binding<Bool> {
         Binding(
-            get: { suggestionSettings.selectedIndicatorMode },
-            set: { mode in
-                suggestionSettings.selectIndicatorMode(mode)
-            }
+            get: { suggestionSettings.showIndicator },
+            set: { suggestionSettings.setShowIndicator($0) }
         )
     }
 

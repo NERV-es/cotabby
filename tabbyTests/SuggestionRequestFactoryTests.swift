@@ -137,7 +137,8 @@ final class SuggestionRequestFactoryTests: XCTestCase {
         )
 
         XCTAssertEqual(result.request.userName, "Casey")
-        XCTAssertEqual(result.request.userTags, ["Prefer direct wording."])
+        // userTags disabled — re-enable when the feature is validated.
+        XCTAssertNil(result.request.userTags)
         XCTAssertEqual(
             result.request.visualContextSummary,
             "Calendar window says project review at 3 PM."
