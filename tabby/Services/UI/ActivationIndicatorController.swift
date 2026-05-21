@@ -3,14 +3,18 @@ import Foundation
 import SwiftUI
 
 /// File overview:
-/// Owns the tiny non-activating panel that marks supported inputs with a subtle caret pointer.
-/// Unlike the ghost-text overlay, this controller is focus-driven and toggled by a simple boolean.
+/// Owns the tiny non-activating panel that marks supported inputs with a subtle affordance.
+/// Unlike the ghost-text overlay, this controller is focus-driven and can anchor either to the
+/// caret itself or to the left edge of the active text area.
 ///
 /// Keeping this as a separate controller preserves the architectural split between:
 /// supported-field affordances and suggestion-specific UI.
 @MainActor
 final class ActivationIndicatorController {
     private let verticalGap: CGFloat = 2
+    /// Field-edge mode should visually touch the input's outside edge. A gap reads as accidental
+    /// padding because the icon is an affordance for the field itself, not for the surrounding UI.
+    private let fieldEdgeGap: CGFloat = 0
     private let screenInset: CGFloat = 2
 
     private lazy var contentView: NSHostingView<AnyView> = {
@@ -36,15 +40,20 @@ final class ActivationIndicatorController {
         return panel
     }()
 
-    private var isVisible = false
+    private var lastMode: ActivationIndicatorMode?
 
-    /// Shows or hides the caret-anchored indicator based on a simple boolean toggle.
+    /// Sizes and positions the chosen activation affordance for the current field.
+    ///
+    /// `caretAnchor` points directly at the insertion point, while `fieldEdgeIcon` places tabby's
+    /// icon outside the text area's left edge so the signal stays visible even when caret geometry
+    /// is jittery.
     func show(
-        enabled: Bool,
-        caretRect: CGRect
+        mode: ActivationIndicatorMode,
+        caretRect: CGRect,
+        inputFrameRect: CGRect?
     ) {
-        guard enabled else {
-            hide(reason: "Activation indicator hidden because it is disabled.")
+        guard mode != .hidden else {
+            hide(reason: "Activation indicator hidden because the chosen mode is Hidden.")
             return
         }
 
@@ -53,25 +62,51 @@ final class ActivationIndicatorController {
             return
         }
 
-        contentView.rootView = AnyView(CaretAnchorIndicatorView())
+        contentView.rootView = AnyView(view(for: mode))
         contentView.layoutSubtreeIfNeeded()
         let contentSize = contentView.fittingSize
-        let origin = caretAnchorOrigin(for: caretRect, contentSize: contentSize)
+
+        let origin: CGPoint
+        switch mode {
+        case .hidden:
+            hide(reason: "Activation indicator hidden because the chosen mode is Hidden.")
+            return
+        case .caretAnchor:
+            origin = caretAnchorOrigin(for: caretRect, contentSize: contentSize)
+        case .fieldEdgeIcon:
+            origin = fieldEdgeIconOrigin(
+                caretRect: caretRect,
+                inputFrameRect: inputFrameRect,
+                contentSize: contentSize
+            )
+        }
 
         let frame = CGRect(origin: origin, size: contentSize).integral
-        if isVisible, panel.frame == frame, panel.isVisible {
+        if lastMode == mode, panel.frame == frame, panel.isVisible {
             return
         }
 
         panel.setFrame(frame, display: true)
         panel.orderFrontRegardless()
-        isVisible = true
+        lastMode = mode
     }
 
-    /// Hides the indicator when Tabby is not actively supporting the current field.
+    /// Hides the indicator when tabby is not actively supporting the current field.
     func hide(reason _: String) {
         panel.orderOut(nil)
-        isVisible = false
+        lastMode = nil
+    }
+
+    @ViewBuilder
+    private func view(for mode: ActivationIndicatorMode) -> some View {
+        switch mode {
+        case .hidden:
+            EmptyView()
+        case .caretAnchor:
+            CaretAnchorIndicatorView()
+        case .fieldEdgeIcon:
+            FieldEdgeIconIndicatorView()
+        }
     }
 
     /// Centers the caret pointer horizontally on the caret and prefers placing it just below the
@@ -103,6 +138,44 @@ final class ActivationIndicatorController {
         return CGPoint(x: clampedX, y: clampedY)
     }
 
+    /// Places tabby's icon just outside the text area's left edge. When the field is flush against
+    /// the screen edge we fall back to the right side so the icon stays fully visible.
+    private func fieldEdgeIconOrigin(
+        caretRect: CGRect,
+        inputFrameRect: CGRect?,
+        contentSize: CGSize
+    ) -> CGPoint {
+        let anchorRect = if let inputFrameRect, !inputFrameRect.isEmpty {
+            inputFrameRect
+        } else {
+            caretRect
+        }
+
+        let preferredLeftX = anchorRect.minX - contentSize.width - fieldEdgeGap
+        let fallbackRightX = anchorRect.maxX + fieldEdgeGap
+        let centeredY = anchorRect.midY - (contentSize.height / 2)
+
+        guard let screen = screen(for: anchorRect) else {
+            return CGPoint(x: preferredLeftX, y: centeredY)
+        }
+
+        let visibleFrame = screen.visibleFrame
+        let preferredX = preferredLeftX >= visibleFrame.minX + screenInset
+            ? preferredLeftX
+            : fallbackRightX
+
+        let clampedX = min(
+            max(preferredX, visibleFrame.minX + screenInset),
+            visibleFrame.maxX - contentSize.width - screenInset
+        )
+        let clampedY = min(
+            max(centeredY, visibleFrame.minY + screenInset),
+            visibleFrame.maxY - contentSize.height - screenInset
+        )
+
+        return CGPoint(x: clampedX, y: clampedY)
+    }
+
     /// Chooses the screen that currently contains the given rect's center point.
     private func screen(for rect: CGRect) -> NSScreen? {
         let midpoint = CGPoint(x: rect.midX, y: rect.midY)
@@ -120,6 +193,31 @@ final class ActivationIndicatorController {
 private final class ActivationIndicatorPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+}
+
+private struct FieldEdgeIconIndicatorView: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var bgColor: Color {
+        colorScheme == .dark ? Color(white: 0.15) : Color(white: 0.92)
+    }
+
+    private var pawColor: Color {
+        colorScheme == .dark ? .white : Color(white: 0.25)
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(bgColor)
+            Image(systemName: "pawprint.fill")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(pawColor)
+        }
+        .frame(width: 20, height: 20)
+        .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
+        .fixedSize()
+    }
 }
 
 private struct CaretAnchorIndicatorView: View {

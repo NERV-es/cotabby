@@ -139,8 +139,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         activationIndicatorController.show(
-            enabled: suggestionSettings.showCaretIndicator,
-            caretRect: context.caretRect
+            mode: suggestionSettings.selectedIndicatorMode,
+            caretRect: context.caretRect,
+            inputFrameRect: context.inputFrameRect
         )
     }
 
