@@ -24,8 +24,13 @@ final class WelcomeCoordinator: NSObject, NSWindowDelegate {
     private let userDefaults: UserDefaults
 
     private var welcomeWindowController: NSWindowController?
+    private var permissionReminderWindowController: NSWindowController?
 
-    private static let hasShownWelcomeDefaultsKey = "hasShownWelcomeWindow"
+    private static let onboardingCompletedDefaultsKey = "onboardingCompleted"
+
+    /// Legacy key from when the flag was set at presentation time rather than completion.
+    /// Migrated once so existing users who finished onboarding aren't forced through it again.
+    private static let legacyHasShownWelcomeDefaultsKey = "hasShownWelcomeWindow"
 
     init(
         permissionManager: PermissionManager,
@@ -45,16 +50,48 @@ final class WelcomeCoordinator: NSObject, NSWindowDelegate {
         self.userDefaults = userDefaults
     }
 
-    /// Presents the welcome UI once for the lifetime of this installation.
-    /// The "shown" bit is persisted at presentation time so first-run onboarding stays one-time
-    /// even if the user simply closes the window instead of pressing the button.
+    /// Whether the user completed the full onboarding wizard (reached "done" and dismissed).
+    private var isOnboardingCompleted: Bool {
+        if userDefaults.bool(forKey: Self.onboardingCompletedDefaultsKey) {
+            return true
+        }
+
+        // Migrate from the legacy key: existing users who saw onboarding before this change
+        // should not be forced through the wizard again.
+        if userDefaults.bool(forKey: Self.legacyHasShownWelcomeDefaultsKey) {
+            userDefaults.set(true, forKey: Self.onboardingCompletedDefaultsKey)
+            return true
+        }
+
+        return false
+    }
+
+    /// Presents the welcome wizard if the user has never completed onboarding.
+    ///
+    /// Unlike the previous approach, the completion flag is set when the user finishes the wizard
+    /// (taps "Start Using tabby"), not when the window first appears. If the user closes the
+    /// window mid-flow or macOS prompts a restart for permissions, the wizard will reappear on
+    /// next launch so they don't lose their place.
     func presentIfNeeded() {
-        guard !userDefaults.bool(forKey: Self.hasShownWelcomeDefaultsKey) else {
+        guard !isOnboardingCompleted else {
             return
         }
 
-        userDefaults.set(true, forKey: Self.hasShownWelcomeDefaultsKey)
         showWelcome()
+    }
+
+    /// Shows just the permission step when the user completed onboarding previously but one or
+    /// more required permissions are now missing (e.g., after a permission-prompted restart, or
+    /// if the user later revoked a permission in System Settings).
+    func presentPermissionReminderIfNeeded() {
+        guard isOnboardingCompleted,
+              !permissionManager.requiredPermissionsGranted,
+              permissionReminderWindowController == nil
+        else {
+            return
+        }
+
+        showPermissionReminder()
     }
 
     /// Manual entry point for reopening the welcome screen later from the menu.
@@ -77,7 +114,7 @@ final class WelcomeCoordinator: NSObject, NSWindowDelegate {
                     self?.resizeWelcomeWindow(to: size)
                 },
                 onDismiss: { [weak self] in
-                    self?.dismissWelcome()
+                    self?.completeOnboarding()
                 }
             )
         )
@@ -115,12 +152,59 @@ final class WelcomeCoordinator: NSObject, NSWindowDelegate {
         if closingWindow == welcomeWindowController?.window {
             permissionGuidanceController.dismiss()
             welcomeWindowController = nil
+        } else if closingWindow == permissionReminderWindowController?.window {
+            permissionGuidanceController.dismiss()
+            permissionReminderWindowController = nil
         }
     }
 
-    private func dismissWelcome() {
+    /// Called when the user completes the full onboarding wizard ("Start Using tabby").
+    /// Persists the completion flag so the wizard does not reappear.
+    private func completeOnboarding() {
+        userDefaults.set(true, forKey: Self.onboardingCompletedDefaultsKey)
         permissionGuidanceController.dismiss()
         welcomeWindowController?.close()
+    }
+
+    private func showPermissionReminder() {
+        let hostingController = NSHostingController(
+            rootView: PermissionReminderView(
+                permissionManager: permissionManager,
+                permissionGuidanceController: permissionGuidanceController,
+                onDismiss: { [weak self] in
+                    self?.dismissPermissionReminder()
+                }
+            )
+        )
+
+        let window = NSWindow(
+            contentRect: CGRect(origin: .zero, size: NSSize(width: 540, height: 420)),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "tabby — Permissions"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.level = .normal
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        window.delegate = self
+        window.contentViewController = hostingController
+
+        let windowController = NSWindowController(window: window)
+        permissionReminderWindowController = windowController
+
+        NSApp.activate(ignoringOtherApps: true)
+        windowController.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func dismissPermissionReminder() {
+        permissionGuidanceController.dismiss()
+        permissionReminderWindowController?.close()
     }
 
     /// Window sizing is an AppKit responsibility, so the SwiftUI onboarding view reports its

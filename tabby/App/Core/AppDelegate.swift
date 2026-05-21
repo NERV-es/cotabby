@@ -115,6 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appUpdateManager.start()
         suggestionCoordinator.start()
         welcomeCoordinator.presentIfNeeded()
+        welcomeCoordinator.presentPermissionReminderIfNeeded()
     }
 
     /// Stops long-lived services before process exit so timers and runtime resources detach cleanly.
