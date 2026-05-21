@@ -28,10 +28,6 @@ final class WelcomeCoordinator: NSObject, NSWindowDelegate {
 
     private static let onboardingCompletedDefaultsKey = "onboardingCompleted"
 
-    /// Legacy key from when the flag was set at presentation time rather than completion.
-    /// Migrated once so existing users who finished onboarding aren't forced through it again.
-    private static let legacyHasShownWelcomeDefaultsKey = "hasShownWelcomeWindow"
-
     init(
         permissionManager: PermissionManager,
         permissionGuidanceController: PermissionGuidanceController,
@@ -51,19 +47,13 @@ final class WelcomeCoordinator: NSObject, NSWindowDelegate {
     }
 
     /// Whether the user completed the full onboarding wizard (reached "done" and dismissed).
+    ///
+    /// The legacy `hasShownWelcomeWindow` key is intentionally NOT migrated here. That key was
+    /// set at presentation time (before the user finished), so treating it as "completed" would
+    /// skip profile and model selection for upgrading users. Forcing one more pass through the
+    /// wizard on upgrade is better than silently dropping steps.
     private var isOnboardingCompleted: Bool {
-        if userDefaults.bool(forKey: Self.onboardingCompletedDefaultsKey) {
-            return true
-        }
-
-        // Migrate from the legacy key: existing users who saw onboarding before this change
-        // should not be forced through the wizard again.
-        if userDefaults.bool(forKey: Self.legacyHasShownWelcomeDefaultsKey) {
-            userDefaults.set(true, forKey: Self.onboardingCompletedDefaultsKey)
-            return true
-        }
-
-        return false
+        userDefaults.bool(forKey: Self.onboardingCompletedDefaultsKey)
     }
 
     /// Presents the welcome wizard if the user has never completed onboarding.
