@@ -26,7 +26,6 @@ struct TabbyApp: App {
                     appDelegate.settingsCoordinator.showSettings()
                 },
                 onReportFeedback: {
-                    // The URL literal is always valid, but if-let avoids the force-unwrap.
                     if let feedbackURL = URL(string: "https://www.tabbyapp.dev/feedback") {
                         NSWorkspace.shared.open(feedbackURL)
                     }
