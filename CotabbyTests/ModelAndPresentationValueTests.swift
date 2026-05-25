@@ -147,11 +147,13 @@ final class RuntimeAndInputModelValueTests: XCTestCase {
         )
         XCTAssertEqual(
             RuntimeModelCatalog.displayName(for: "Qwen3.5-0.8B-Q4_K_M.gguf"),
-            "cotabby-swift-pro-1"
+            "cotabby-balanced-1"
         )
+        // The retired gemma-3-1b model is no longer in the catalog, so it falls
+        // back to its raw filename like any unknown local GGUF.
         XCTAssertEqual(
             RuntimeModelCatalog.displayName(for: "gemma-3-1b-it-Q4_K_M.gguf"),
-            "cotabby-balanced-1"
+            "gemma-3-1b-it-Q4_K_M.gguf"
         )
         XCTAssertEqual(
             RuntimeModelCatalog.displayName(for: "gemma-4-E2B-it-Q4_K_M.gguf"),

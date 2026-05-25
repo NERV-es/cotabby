@@ -88,8 +88,6 @@ enum RuntimeModelCatalog {
         case "Qwen3-0.6B-Q4_K_M.gguf":
             return "cotabby-swift-1"
         case "Qwen3.5-0.8B-Q4_K_M.gguf":
-            return "cotabby-swift-pro-1"
-        case "gemma-3-1b-it-Q4_K_M.gguf":
             return "cotabby-balanced-1"
         case "gemma-4-E2B-it-Q4_K_M.gguf":
             return "cotabby-careful-1"
@@ -129,17 +127,6 @@ enum RuntimeModelCatalog {
             sha256: "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517"
         ),
         DownloadableRuntimeModel(
-            filename: "gemma-3-1b-it-Q4_K_M.gguf",
-            displayName: displayName(for: "gemma-3-1b-it-Q4_K_M.gguf"),
-            downloadURL: URL(
-                string:
-                    "https://huggingface.co/unsloth/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf?download=true"
-            )!,
-            approximateSizeInGigabytes: 0.8,
-            expectedSizeBytes: 806_058_272,
-            sha256: "8270790f3ab69fdfe860b7b64008d9a19986d8df7e407bb018184caa08798ebd"
-        ),
-        DownloadableRuntimeModel(
             filename: "gemma-4-E2B-it-Q4_K_M.gguf",
             displayName: displayName(for: "gemma-4-E2B-it-Q4_K_M.gguf"),
             downloadURL: URL(
@@ -166,7 +153,7 @@ struct LlamaRuntimeConfiguration: Equatable, Sendable {
     static let `default` = LlamaRuntimeConfiguration(
         runtimeDirectoryPath: nil,
         preferredModelNames: [
-            "gemma-3-1b-it-Q4_K_M.gguf",
+            "Qwen3.5-0.8B-Q4_K_M.gguf",
             "Qwen3-0.6B-Q4_K_M.gguf"
         ],
         contextWindowTokens: 2048,
