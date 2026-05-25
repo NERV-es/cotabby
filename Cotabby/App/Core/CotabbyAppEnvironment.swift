@@ -31,7 +31,7 @@ final class CotabbyAppEnvironment {
     private var cancellables = Set<AnyCancellable>()
 
     init() {
-        TabbyLogger.app.info("Building dependency graph")
+        CotabbyLogger.app.info("Building dependency graph")
         let configuration = SuggestionConfiguration.standard
         let permissionManager = PermissionManager()
         let permissionGuidanceController = PermissionGuidanceController(
@@ -106,18 +106,18 @@ final class CotabbyAppEnvironment {
             foundationModelEngine = FoundationModelSuggestionEngine(
                 availabilityService: foundationModelAvailabilityService
             )
-            TabbyLogger.app.info("Foundation model engine available")
+            CotabbyLogger.app.info("Foundation model engine available")
         } else {
             foundationModelEngine = UnavailableSuggestionEngine(
                 message: foundationModelAvailabilityService.userVisibleMessage
             )
-            TabbyLogger.app.info("Foundation model engine unavailable (macOS version)")
+            CotabbyLogger.app.info("Foundation model engine unavailable (macOS version)")
         }
         #else
         foundationModelEngine = UnavailableSuggestionEngine(
             message: foundationModelAvailabilityService.userVisibleMessage
         )
-        TabbyLogger.app.info("Foundation model engine unavailable (SDK)")
+        CotabbyLogger.app.info("Foundation model engine unavailable (SDK)")
         #endif
 
         let suggestionEngine: any SuggestionGenerating = SuggestionEngineRouter(
