@@ -211,12 +211,12 @@ struct SettingsView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 24) {
                 Text("This information is passed to the AI to help personalize your completions.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Name")
                         .font(.system(size: 13, weight: .medium))
 
@@ -229,7 +229,7 @@ struct SettingsView: View {
 
                 CustomRulesEditor(suggestionSettings: suggestionSettings)
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 10)
         }
     }
 
