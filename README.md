@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <sub>Cotabby is free and open source. If it's useful to you, please consider supporting development for the sake of open source ✨</sub>
+  <sub>Cotabby is free and open source. If it's useful to you, please consider supporting development</sub>
 </p>
 
 <p align="center">
