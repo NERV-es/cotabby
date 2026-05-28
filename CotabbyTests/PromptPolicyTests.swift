@@ -6,7 +6,7 @@ import XCTest
 /// Foundation Models gives Cotabby an instructions channel, so these tests lock down which rules go
 /// into high-priority instructions and which field-specific text remains in the short prompt.
 final class FoundationModelPromptRendererTests: XCTestCase {
-    func test_sessionInstructions_includeAutocompleteContractAndRequestPolicies() {
+    func test_sessionInstructions_declarePositiveContinuationIdentityAndOutputContract() {
         let request = CotabbyTestFixtures.suggestionRequest(
             completionLengthInstruction: "UNIQUE_LENGTH_POLICY",
             userName: "UNIQUE_PROFILE_NAME"
@@ -14,10 +14,36 @@ final class FoundationModelPromptRendererTests: XCTestCase {
 
         let instructions = FoundationModelPromptRenderer.sessionInstructions(for: request)
 
-        XCTAssertTrue(instructions.contains("text-continuation engine"))
-        // The word-range cue is no longer injected — length is token-budget-only on both engines.
+        // Positive identity: name what the model *is*, not what it isn't.
+        XCTAssertTrue(instructions.contains("complete partially-typed text"))
+        // Output contract folds the anti-greeting / anti-markdown / anti-quote rules into one
+        // forbidden-content line, anchored on "Output the continuation only:" so a future
+        // wording change cannot silently drop a rule.
+        XCTAssertTrue(instructions.contains("Output the continuation only:"))
+        XCTAssertTrue(instructions.contains("no greeting"))
+        XCTAssertTrue(instructions.contains("no sign-off"))
+        XCTAssertTrue(instructions.contains("no quotes"))
+        XCTAssertTrue(instructions.contains("no markdown"))
+        XCTAssertTrue(instructions.contains("no labels"))
+        XCTAssertTrue(instructions.contains("no explanation"))
+        // Style line still has to match the existing field — language, register, casing.
+        XCTAssertTrue(instructions.contains("Match the existing language, register, casing"))
+        // The word-range cue is still token-budget-only on both engines.
         XCTAssertFalse(instructions.contains("UNIQUE_LENGTH_POLICY"))
-        XCTAssertTrue(instructions.contains("Do not repeat or quote the existing text."))
+    }
+
+    /// Locks in the anti-echo rule. Without it, the chat-tuned model emits the prefix back on some
+    /// mid-line comment and mid-sentence prose cases — the normalizer then strips the echo and the
+    /// overlay shows nothing. The eval suite (`FoundationModelDriftEvalTests`) was the canary that
+    /// surfaced this regression when session reuse was tightened to single-turn, so it stays
+    /// pinned here as a fast unit-level guard before the live eval ever runs.
+    func test_sessionInstructions_forbidEchoingExistingText() {
+        let request = CotabbyTestFixtures.suggestionRequest()
+
+        let instructions = FoundationModelPromptRenderer.sessionInstructions(for: request)
+
+        XCTAssertTrue(instructions.contains("Continue from the position immediately after the existing text"))
+        XCTAssertTrue(instructions.contains("Do not repeat or quote the existing text"))
     }
 
     /// The user's name is deliberately withheld from Apple's chat-tuned model: a stated name is the
@@ -30,14 +56,24 @@ final class FoundationModelPromptRendererTests: XCTestCase {
         XCTAssertFalse(instructions.contains("UNIQUE_PROFILE_NAME"))
     }
 
-    /// Few-shot examples are the primary anti-drift mechanism, so guard their presence.
-    func test_sessionInstructions_includeContinuationExamples() {
+    /// The few-shot set was trimmed from five demonstrations to two on purpose — one
+    /// prose-with-salutation and one code — so this test pins both presence *and* count to keep
+    /// future edits from silently growing the set back.
+    func test_sessionInstructions_includeExactlyTwoContinuationExamples() {
         let request = CotabbyTestFixtures.suggestionRequest()
 
         let instructions = FoundationModelPromptRenderer.sessionInstructions(for: request)
 
         XCTAssertTrue(instructions.contains("Examples ("))
-        XCTAssertTrue(instructions.contains("Continuation:"))
+        // Scope the "Continuation:" count to the examples block so an injected
+        // language hint or custom rule containing the substring cannot inflate it.
+        let examplesHeader = "Examples (quotes only mark the boundaries; never output the quotes):"
+        let examplesSection = instructions
+            .components(separatedBy: examplesHeader)
+            .dropFirst()
+            .joined(separator: examplesHeader)
+        let continuationCount = examplesSection.components(separatedBy: "Continuation:").count - 1
+        XCTAssertEqual(continuationCount, 2, "Expected the trimmed two-example demo set.")
     }
 
     func test_prompt_includesApplicationNameAndPreservesPrefixText() {
