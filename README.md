@@ -1,12 +1,12 @@
 <p align="center">
   <a href="https://cotabby.app" target="_blank">
-    <img height="200" alt="Cotabby logo" src="https://github.com/user-attachments/assets/1e223e72-770c-417b-82e5-83f18cd5a3b2" />
+    <img height="150" alt="Cotabby logo" src="https://github.com/user-attachments/assets/1e223e72-770c-417b-82e5-83f18cd5a3b2" />
   </a>
 </p>
 
 <h1 align="center">Cotabby [beta]</h1>
 
-<p align="center"><em>Open-source, local-first AI autocomplete for macOS.</em></p>
+<p align="center"><em>Open-source, local-first AI autocomplete for macOS, with inline <code>:emoji:</code> suggestions.</em></p>
 
 <p align="center">
   <a href="https://cotabby.app"><strong>Visit the landing page →</strong></a>
@@ -33,7 +33,9 @@
 
 ## What It Does
 
-Cotabby is a menu bar app that brings inline autocomplete to the text field you're already using. Keep typing in your host app: Cotabby watches the focused field, generates a continuation, and renders it as ghost text next to your caret. Press `Tab` to accept a chunk, keep pressing to advance, or just keep typing to diverge.
+Cotabby brings AI autocomplete to the text fields you already use on macOS. It works system-wide, stays out of your way, and shows suggestions as ghost text beside your cursor. Press `Tab` to accept a word, keep pressing to take more, or keep typing to ignore it.
+
+It also includes inline emoji autocomplete: type `:smile`, `:tada`, or `:+1` and pick the emoji without leaving your current app.
 
 Everything runs on-device. No hosted API, no cloud round-trip.
 
@@ -74,7 +76,8 @@ Everything runs on-device. No hosted API, no cloud round-trip.
 
 - **System-wide completions** -- Works in any macOS text field (Safari, Notes, Mail, etc.)
 - **Ghost text UI** -- Suggestions appear as translucent overlay text at your cursor
-- **100% local** -- All inference runs on-device. No data ever leaves your Mac
+- **Inline emoji autocomplete** -- Type `:emoji:`-style shortcuts and insert the selected emoji without leaving your current app
+- **100% local** -- AI inference and emoji matching run on-device
 - **Visual context** -- Screenshot OCR gives the model awareness of what's on screen
 - **Low latency** -- Optimized for fast response on Apple Silicon
 
@@ -82,7 +85,7 @@ Everything runs on-device. No hosted API, no cloud round-trip.
 
 **Apple Intelligence**: uses Apple's on-device `FoundationModels` runtime on macOS 26 or later, no download required.
 
-**Open Source**: runs local GGUF models in-process through llama.cpp via `llama.swift`. Cotabby ships with four built-in downloadable models:
+**Open Source**: runs local GGUF models in-process through llama.cpp via `CotabbyInference`. Cotabby ships with four built-in downloadable models:
 
 | Model          | File                              | Size    | Source                                                                                                  |
 | -------------- | --------------------------------- | ------- | ------------------------------------------------------------------------------------------------------- |
@@ -99,6 +102,8 @@ Browse the [unsloth GGUF collection on Hugging Face](https://huggingface.co/unsl
 
 ## Install
 
+**Compatibility:** Requires macOS 15.0 or later. Apple Intelligence suggestions require macOS 26 or later; on earlier supported systems, use the Open Source engine.
+
 ### Homebrew
 
 ```sh
@@ -110,26 +115,13 @@ Upgrade later with `brew upgrade --cask cotabby`. The tap repo is [FuJacob/homeb
 
 ### Manual download
 
-1. Download the latest `Cotabby.dmg` from GitHub Releases.
-2. Drag `Cotabby.app` into `Applications` and launch it.
-
-If macOS blocks first launch, right-click `Cotabby.app` → `Open`, or allow it in `System Settings → Privacy & Security`.
-
-### Set up
-
-After installing with either method:
-
-1. Grant **Accessibility**, **Input Monitoring**, and **Screen Recording** when prompted.
-2. Pick an engine. Apple Intelligence if available, otherwise Open Source plus a model.
-3. Start typing in any supported editable field.
+Download and install the latest release from [cotabby.app](https://cotabby.app).
 
 ### Why those permissions?
 
 - **Accessibility**: read the focused text field's value and caret position.
-- **Input Monitoring**: detect global `Tab` presses for acceptance.
+- **Input Monitoring**: detect global `Tab` presses, acceptance shortcuts, and inline emoji triggers.
 - **Screen Recording**: capture a screenshot around the focused field for visual context (OCR).
-
-**Requires macOS 15.0 or later.** Apple Intelligence suggestions require macOS 26 or later; on earlier supported systems, use the Open Source engine.
 
 ## Local Development
 
@@ -149,15 +141,10 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, bui
 
 ## Acknowledgments
 
-- [llama.cpp](https://github.com/ggerganov/llama.cpp): local GGUF inference engine that powers the Open Source models
-- [llama.swift](https://github.com/mattt/llama.swift): Swift package wrapping llama.cpp for in-process inference
-- [Sparkle](https://github.com/sparkle-project/Sparkle): in-app update framework
-- Apple's [FoundationModels](https://developer.apple.com/documentation/foundationmodels) framework: on-device Apple Intelligence runtime
-- Apple's Accessibility (AX) APIs: focused-field discovery and caret geometry
-- The [Qwen](https://github.com/QwenLM) and [Gemma](https://ai.google.dev/gemma) model teams for the open-weight models Cotabby ships with
-- The Hugging Face community for hosting and distributing GGUF model weights
-- Swift, SwiftUI, and AppKit, which together make the menu bar app, overlays, and settings UI possible
-- Everyone who has filed issues, tested prereleases, and contributed pull requests
+- [llama.cpp](https://github.com/ggerganov/llama.cpp), [CotabbyInference](https://github.com/FuJacob/cotabbyinference), [Sparkle](https://github.com/sparkle-project/Sparkle), and [swift-log](https://github.com/apple/swift-log) for the core runtime, update, and logging infrastructure.
+- Apple's FoundationModels, Accessibility APIs, SwiftUI, and AppKit for the on-device generation and macOS integration layers.
+- [GitHub gemoji](https://github.com/github/gemoji), Hugging Face, and the model teams listed above for the emoji data and downloadable model ecosystem.
+- Everyone who has filed issues, tested prereleases, and contributed pull requests.
 
 ## Created by
 
@@ -165,4 +152,6 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, bui
 
 ## License
 
-Cotabby is licensed under the [GNU Affero General Public License v3.0](LICENSE). The AGPL's network-use clause means any modified version made available to users over a network must also be source-available under the same terms.
+Cotabby is licensed under the [GNU Affero General Public License v3.0](LICENSE). You can use, study, modify, and redistribute the app, but if you distribute a modified version or make one available to users over a network, you must provide the corresponding source code under the same license.
+
+Third-party dependencies, emoji data, and downloadable model weights keep their own licenses and usage terms.
