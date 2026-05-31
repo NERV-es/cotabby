@@ -148,7 +148,7 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, bui
 
 ## Created by
 
-<a href="https://github.com/FuJacob">@FuJacob</a> and <a href="https://github.com/jam-cai">@jam-cai</a> — two Computer Science students at the University of Waterloo.
+Originally created by <a href="https://github.com/FuJacob">@FuJacob</a>. Now developed and maintained by <a href="https://github.com/FuJacob">@FuJacob</a> and <a href="https://github.com/jam-cai">@jam-cai</a>.
 
 ## License
 
