@@ -137,6 +137,34 @@ final class LlamaRuntimeManager: ObservableObject {
         }
     }
 
+    /// Generates multiple candidates using tree decode (shared prefix, diverse sampling).
+    /// Falls back to single-candidate if tree decode is disabled or fails.
+    func generateTree(
+        prompt: String,
+        cachedPrefixBytes: Int? = nil,
+        options: LlamaGenerationOptions,
+        config: TreeDecodeConfiguration
+    ) async throws -> TreeDecodeResult {
+        _ = try await preparedRuntime()
+
+        let core = self.core
+        let task = Task.detached {
+            try core.generateTree(
+                prompt: prompt,
+                cachedPrefixBytes: cachedPrefixBytes,
+                options: options,
+                config: config
+            )
+        }
+        return try await withTaskCancellationHandler {
+            let result = try await task.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
     /// Generates a short summary using an ephemeral context so the autocomplete cache is unaffected.
     func summarize(
         prompt: String,

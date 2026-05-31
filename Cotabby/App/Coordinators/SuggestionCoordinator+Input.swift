@@ -148,6 +148,14 @@ extension SuggestionCoordinator {
             return acceptEntireSuggestion(originalEvent: event)
         }
 
+        if event.kind == .cycleNext {
+            return cycleAlternative(forward: true)
+        }
+
+        if event.kind == .cyclePrevious {
+            return cycleAlternative(forward: false)
+        }
+
         if let activeSession = interactionState.activeSession {
             return handleInputEvent(event, with: activeSession)
         }
@@ -287,7 +295,7 @@ extension SuggestionCoordinator {
             state = .idle
             return false
 
-        case .other, .acceptance, .fullAcceptance:
+        case .other, .acceptance, .fullAcceptance, .cycleNext, .cyclePrevious:
             return false
         }
     }

@@ -240,6 +240,20 @@ struct SuggestionResult: Equatable, Sendable {
     let rawText: String
     let text: String
     let latency: TimeInterval
+
+    /// Alternative suggestions from tree decode (empty when tree decode is disabled).
+    let alternatives: [String]
+
+    init(generation: UInt64, rawText: String, text: String, latency: TimeInterval, alternatives: [String] = []) {
+        self.generation = generation
+        self.rawText = rawText
+        self.text = text
+        self.latency = latency
+        self.alternatives = alternatives
+    }
+
+    /// Whether the user can cycle through alternatives.
+    var hasAlternatives: Bool { !alternatives.isEmpty }
 }
 
 /// Represents one active inline-completion session after the model has produced a suggestion.
@@ -254,16 +268,67 @@ struct ActiveSuggestionSession: Equatable, Sendable {
     let consumedCharacterCount: Int
     let latency: TimeInterval
 
+    /// Tree decode alternatives (empty when single-candidate mode).
+    let alternatives: [String]
+    /// Index into [fullText] + alternatives. 0 = primary, 1+ = alternatives.
+    let currentAlternativeIndex: Int
+
     init(
         baseContext: FocusedInputContext,
         fullText: String,
         consumedCharacterCount: Int = 0,
-        latency: TimeInterval
+        latency: TimeInterval,
+        alternatives: [String] = [],
+        currentAlternativeIndex: Int = 0
     ) {
         self.baseContext = baseContext
         self.fullText = fullText
         self.consumedCharacterCount = min(max(consumedCharacterCount, 0), fullText.count)
         self.latency = latency
+        self.alternatives = alternatives
+        self.currentAlternativeIndex = currentAlternativeIndex
+    }
+
+    /// The currently displayed suggestion text (primary or selected alternative).
+    var displayedText: String {
+        if currentAlternativeIndex == 0 { return fullText }
+        let altIdx = currentAlternativeIndex - 1
+        guard altIdx < alternatives.count else { return fullText }
+        return alternatives[altIdx]
+    }
+
+    /// Whether the user can cycle alternatives.
+    var canCycleAlternatives: Bool { !alternatives.isEmpty }
+
+    /// Total number of candidates (primary + alternatives).
+    var totalCandidates: Int { 1 + alternatives.count }
+
+    /// Returns a new session with the next alternative selected (wraps around).
+    func cycledToNext() -> ActiveSuggestionSession {
+        let nextIndex = (currentAlternativeIndex + 1) % totalCandidates
+        let nextText = nextIndex == 0 ? fullText : alternatives[nextIndex - 1]
+        return ActiveSuggestionSession(
+            baseContext: baseContext,
+            fullText: nextText,
+            consumedCharacterCount: 0,
+            latency: latency,
+            alternatives: alternatives,
+            currentAlternativeIndex: nextIndex
+        )
+    }
+
+    /// Returns a new session with the previous alternative selected (wraps around).
+    func cycledToPrevious() -> ActiveSuggestionSession {
+        let prevIndex = (currentAlternativeIndex - 1 + totalCandidates) % totalCandidates
+        let prevText = prevIndex == 0 ? fullText : alternatives[prevIndex - 1]
+        return ActiveSuggestionSession(
+            baseContext: baseContext,
+            fullText: prevText,
+            consumedCharacterCount: 0,
+            latency: latency,
+            alternatives: alternatives,
+            currentAlternativeIndex: prevIndex
+        )
     }
 
     var acceptedText: String {

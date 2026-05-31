@@ -19,6 +19,9 @@ final class OverlayController: SuggestionOverlayControlling {
 
     var onStateChange: ((OverlayState) -> Void)?
 
+    /// Set by the coordinator before presenting to show "1/3" indicator for tree decode alternatives.
+    var alternativeIndicator: String?
+
     private let suggestionSettings: SuggestionSettingsModel
 
     /// Optional injection seam for tests. When set, `currentRenderModePolicy` returns this directly
@@ -163,7 +166,8 @@ final class OverlayController: SuggestionOverlayControlling {
             fontSize: fontSize,
             customColor: customGhostColor,
             keycapLabel: acceptanceHintLabel,
-            opacity: ghostOpacity
+            opacity: ghostOpacity,
+            alternativeIndicator: alternativeIndicator
         )
 
         let contentView: NSHostingView<GhostSuggestionView>
@@ -294,6 +298,8 @@ private struct GhostSuggestionView: View {
     /// User-controlled fade for the suggestion text, in [0.3, 1.0]. Applied only to the ghost text,
     /// not the keycap, so the acceptance hint stays legible at low opacities.
     let opacity: Double
+    /// Alternative indicator label (e.g. "1/3") or nil when no alternatives available.
+    let alternativeIndicator: String?
 
     var ghostColor: Color {
         let baseColor = customColor
@@ -330,6 +336,20 @@ private struct GhostSuggestionView: View {
             }
         }
         .fixedSize(horizontal: true, vertical: true)
+        .overlay(alignment: .topTrailing) {
+            if let alternativeIndicator {
+                Text(alternativeIndicator)
+                    .font(.system(size: max(fontSize * 0.7, 9), weight: .medium, design: .rounded))
+                    .foregroundStyle(ghostColor)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(colorScheme == .dark ? Color(white: 0.15) : Color(white: 0.92))
+                    )
+                    .offset(x: 4, y: -2)
+            }
+        }
     }
 }
 

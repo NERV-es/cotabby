@@ -12,7 +12,8 @@ import Foundation
 final class SuggestionInteractionState {
     private let contextBuffer: ContextBuffer
 
-    private(set) var activeSession: ActiveSuggestionSession?
+    /// The active suggestion session. Mutable to support cycling alternatives.
+    var activeSession: ActiveSuggestionSession?
     private(set) var pendingInsertionConsumedCount: Int?
 
     init(contextBuffer: ContextBuffer? = nil) {
@@ -50,11 +51,12 @@ final class SuggestionInteractionState {
         clearSuggestion()
     }
 
-    func startSession(fullText: String, liveContext: FocusedInputContext, latency: TimeInterval) -> ActiveSuggestionSession {
+    func startSession(fullText: String, liveContext: FocusedInputContext, latency: TimeInterval, alternatives: [String] = []) -> ActiveSuggestionSession {
         let session = ActiveSuggestionSession(
             baseContext: liveContext,
             fullText: fullText,
-            latency: latency
+            latency: latency,
+            alternatives: alternatives
         )
         activeSession = session
         pendingInsertionConsumedCount = nil

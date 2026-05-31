@@ -107,6 +107,8 @@ protocol SuggestionInserting: AnyObject {
 protocol SuggestionOverlayControlling: AnyObject {
     var state: OverlayState { get }
     var onStateChange: ((OverlayState) -> Void)? { get set }
+    /// Set before calling showSuggestion to display an alternative indicator (e.g. "1/3").
+    var alternativeIndicator: String? { get set }
 
     func showSuggestion(_ text: String, geometry: SuggestionOverlayGeometry)
     func hide(reason: String)

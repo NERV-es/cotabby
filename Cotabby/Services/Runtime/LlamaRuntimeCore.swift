@@ -24,21 +24,22 @@ struct PreparedLlamaRuntime: Sendable {
 }
 
 nonisolated final class LlamaRuntimeCore: @unchecked Sendable {
-    private var engine = CotabbyInferenceEngine()
-    private var preparedRuntime: PreparedLlamaRuntime?
+    // internal access for tree decode extension
+    var engine = CotabbyInferenceEngine()
+    var preparedRuntime: PreparedLlamaRuntime?
 
-    private let autocompleteLock = NSLock()
-    private var autocompleteSequenceID: Int32 = -1
-    private var autocompletePromptBytes: [UInt8] = []
-    private var autocompletePromptTokens: [Int32] = []
-    private var autocompleteSamplingFingerprint: SamplingFingerprint?
+    let autocompleteLock = NSLock()
+    var autocompleteSequenceID: Int32 = -1
+    var autocompletePromptBytes: [UInt8] = []
+    var autocompletePromptTokens: [Int32] = []
+    var autocompleteSamplingFingerprint: SamplingFingerprint?
 
     /// Coordinates model lifecycle with in-flight operations. `generate()` and `summarize()`
     /// increment the active count on entry and decrement on exit. `shutdown()` sets the
     /// shutting-down flag and blocks until all active operations finish before unloading.
-    private let lifecycleCondition = NSCondition()
-    private var activeOperationCount = 0
-    private var isShuttingDown = false
+    let lifecycleCondition = NSCondition()
+    var activeOperationCount = 0
+    var isShuttingDown = false
 
     // MARK: - Model lifecycle
 
@@ -286,7 +287,7 @@ nonisolated final class LlamaRuntimeCore: @unchecked Sendable {
     /// Returns a sequence ID with KV state representing the prompt. Reuses cached KV when the
     /// new prompt shares a validated prefix with the previous one.
     /// Must be called while holding `autocompleteLock`.
-    private func obtainAutocompleteSequence(
+    func obtainAutocompleteSequence(
         promptTokens: [Int32],
         promptBytes: [UInt8],
         fingerprint: SamplingFingerprint,
@@ -340,7 +341,7 @@ nonisolated final class LlamaRuntimeCore: @unchecked Sendable {
         return try buildFreshSequence(promptTokens: promptTokens, options: options)
     }
 
-    private func buildFreshSequence(
+    func buildFreshSequence(
         promptTokens: [Int32],
         options: LlamaGenerationOptions
     ) throws -> Int32 {
@@ -363,14 +364,14 @@ nonisolated final class LlamaRuntimeCore: @unchecked Sendable {
 
     // MARK: - Private: helpers
 
-    private func tokenize(_ text: String) -> [Int32] {
+    func tokenize(_ text: String) -> [Int32] {
         let utf8Count = text.utf8.count
         guard utf8Count > 0 else { return [] }
         let vec = engine.tokenize(text, Int32(utf8Count))
         return Array(vec)
     }
 
-    private static func extractPiece(_ result: SampleResult) -> String {
+    static func extractPiece(_ result: SampleResult) -> String {
         guard let piece = result.piece, result.piece_length > 0 else { return "" }
         let buffer = UnsafeBufferPointer(
             start: UnsafeRawPointer(piece).assumingMemoryBound(to: UInt8.self),
@@ -379,7 +380,7 @@ nonisolated final class LlamaRuntimeCore: @unchecked Sendable {
         return String(bytes: buffer, encoding: .utf8) ?? ""
     }
 
-    private static func samplingConfig(from options: LlamaGenerationOptions) -> SamplingConfig {
+    static func samplingConfig(from options: LlamaGenerationOptions) -> SamplingConfig {
         SamplingConfig(
             max_prediction_tokens: Int32(options.maxPredictionTokens),
             temperature: Float(options.temperature),
@@ -406,7 +407,7 @@ nonisolated final class LlamaRuntimeCore: @unchecked Sendable {
     }
 
     /// Generation knobs that intentionally break KV reuse when changed.
-    private struct SamplingFingerprint: Equatable {
+    struct SamplingFingerprint: Equatable {
         let maxPredictionTokens: Int
         let temperature: Double
         let topK: Int

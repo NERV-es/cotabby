@@ -422,6 +422,16 @@ final class InputMonitor {
             return CapturedInputEvent(kind: .acceptance, keyCode: keyCode, characters: characters, flags: flags)
         }
 
+        // Option+] (keyCode 30) = cycle to next alternative, Option+[ (keyCode 33) = cycle to previous
+        if flags.contains(.maskAlternate), !flags.contains(.maskCommand) {
+            if keyCode == 30 {
+                return CapturedInputEvent(kind: .cycleNext, keyCode: keyCode, characters: characters, flags: flags)
+            }
+            if keyCode == 33 {
+                return CapturedInputEvent(kind: .cyclePrevious, keyCode: keyCode, characters: characters, flags: flags)
+            }
+        }
+
         // We classify events by behavior instead of raw key codes alone.
         // That keeps the prediction layer coupled to "what happened" rather than "which key fired."
         if [123, 124, 125, 126].contains(keyCode) {

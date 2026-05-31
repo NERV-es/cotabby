@@ -43,6 +43,8 @@ struct CapturedInputEvent: Equatable {
     enum Kind: String, Equatable {
         case acceptance
         case fullAcceptance
+        case cycleNext
+        case cyclePrevious
         case textMutation
         case navigation
         case shortcutMutation
@@ -68,7 +70,7 @@ struct CapturedInputEvent: Equatable {
         switch kind {
         case .textMutation, .navigation, .shortcutMutation, .dismissal:
             return true
-        case .acceptance, .fullAcceptance, .other:
+        case .acceptance, .fullAcceptance, .cycleNext, .cyclePrevious, .other:
             return false
         }
     }

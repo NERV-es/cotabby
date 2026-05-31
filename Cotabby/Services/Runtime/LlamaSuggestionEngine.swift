@@ -18,6 +18,7 @@ final class LlamaSuggestionEngine {
     }
 
     /// Executes one generation request and packages the raw and normalized result for the coordinator.
+    /// When tree decode is enabled, generates multiple candidates and returns alternatives.
     func generateSuggestion(for request: SuggestionRequest) async throws -> SuggestionResult {
         do {
             let startTime = Date()
@@ -26,35 +27,50 @@ final class LlamaSuggestionEngine {
             CotabbyLogger.suggestion.debug(
                 "Llama generating: prompt=\(request.prompt.count)B cache_hint=\(hintDesc) max_tokens=\(request.maxPredictionTokens)"
             )
-            let rawSuggestion = try await runtimeManager.generate(
+
+            let options = LlamaGenerationOptions(
+                maxPredictionTokens: request.maxPredictionTokens,
+                temperature: request.temperature,
+                topK: request.topK,
+                topP: request.topP,
+                minP: request.minP,
+                repetitionPenalty: request.repetitionPenalty,
+                seed: request.randomSeed
+            )
+
+            // Use tree decode when enabled (candidateCount > 1)
+            let treeConfig = treeDecodeConfiguration
+            let treeResult = try await runtimeManager.generateTree(
                 prompt: request.prompt,
                 cachedPrefixBytes: cachedPrefixBytes,
-                options: LlamaGenerationOptions(
-                    maxPredictionTokens: request.maxPredictionTokens,
-                    temperature: request.temperature,
-                    topK: request.topK,
-                    topP: request.topP,
-                    minP: request.minP,
-                    repetitionPenalty: request.repetitionPenalty,
-                    seed: request.randomSeed
-                )
+                options: options,
+                config: treeConfig
             )
             try Task.checkCancellation()
 
             promptCacheHintTracker.recordSuccessfulRequest(request)
-            let normalizedSuggestion = SuggestionTextNormalizer.normalize(rawSuggestion, for: request)
+
+            guard let primary = treeResult.primary else {
+                throw SuggestionClientError.generationFailed("Tree decode returned no candidates.")
+            }
+
+            let normalizedPrimary = SuggestionTextNormalizer.normalize(primary.text, for: request)
+            let normalizedAlternatives = treeResult.alternatives.map {
+                SuggestionTextNormalizer.normalize($0.text, for: request)
+            }.filter { !$0.isEmpty && $0 != normalizedPrimary }
+
             let latency = Date().timeIntervalSince(startTime)
-            let rawChars = rawSuggestion.count
-            let normalizedChars = normalizedSuggestion.count
             let latencyMs = Int(latency * 1000)
+            let altCount = normalizedAlternatives.count
             CotabbyLogger.suggestion.debug(
-                "Llama generated: raw=\(rawChars) chars, normalized=\(normalizedChars) chars, latency=\(latencyMs)ms"
+                "Llama tree decode: primary=\(normalizedPrimary.count) chars, \(altCount) alternatives, latency=\(latencyMs)ms"
             )
             return SuggestionResult(
                 generation: request.generation,
-                rawText: rawSuggestion,
-                text: normalizedSuggestion,
-                latency: latency
+                rawText: primary.text,
+                text: normalizedPrimary,
+                latency: latency,
+                alternatives: normalizedAlternatives
             )
         } catch is CancellationError {
             CotabbyLogger.suggestion.debug("Llama generation cancelled")
@@ -73,6 +89,9 @@ final class LlamaSuggestionEngine {
             throw SuggestionClientError.generationFailed(error.localizedDescription)
         }
     }
+
+    /// Tree decode configuration. Defaults to 3 candidates; can be user-configured later.
+    var treeDecodeConfiguration: TreeDecodeConfiguration = .default
 
     /// Clears both the Swift-side hint tracker and the native llama KV cache.
     /// The tracker reset is synchronous because it protects the next request from advertising

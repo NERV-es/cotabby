@@ -363,8 +363,10 @@ extension SuggestionCoordinator {
         text: String,
         at caretRect: CGRect,
         context: FocusedInputContext,
-        isRightToLeft: Bool = false
+        isRightToLeft: Bool = false,
+        alternativeIndicator: String? = nil
     ) {
+        overlayController.alternativeIndicator = alternativeIndicator
         let geometry = SuggestionOverlayGeometry(
             caretRect: caretRect,
             inputFrameRect: context.inputFrameRect,
@@ -384,6 +386,31 @@ extension SuggestionCoordinator {
 
     func hideOverlay(reason: String) {
         latestOverlayMessage = overlayPresenter.hide(reason: reason)
+    }
+
+    // MARK: - Alternative Cycling
+
+    /// Cycles the active suggestion to the next or previous alternative.
+    /// Returns true if the event was consumed (suggestion visible with alternatives).
+    func cycleAlternative(forward: Bool) -> Bool {
+        guard let session = interactionState.activeSession, session.canCycleAlternatives else {
+            return false
+        }
+
+        let cycled = forward ? session.cycledToNext() : session.cycledToPrevious()
+        interactionState.activeSession = cycled
+        state = .ready(text: cycled.displayedText, latency: cycled.latency)
+        let indicator = "\(cycled.currentAlternativeIndex + 1)/\(cycled.totalCandidates)"
+        presentOverlay(
+            text: cycled.displayedText,
+            at: cycled.baseContext.caretRect,
+            context: cycled.baseContext,
+            alternativeIndicator: indicator
+        )
+        CotabbyLogger.suggestion.debug(
+            "Cycled to alternative \(cycled.currentAlternativeIndex)/\(cycled.totalCandidates - 1)"
+        )
+        return true
     }
 
     func logStage(

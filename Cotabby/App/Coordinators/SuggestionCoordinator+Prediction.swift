@@ -217,7 +217,8 @@ extension SuggestionCoordinator {
         let session = interactionState.startSession(
             fullText: result.text,
             liveContext: liveContext,
-            latency: result.latency
+            latency: result.latency,
+            alternatives: result.alternatives
         )
         applySessionDiagnostics(session, acceptanceAction: "Generated new suggestion.")
         state = .ready(text: session.remainingText, latency: session.latency)
