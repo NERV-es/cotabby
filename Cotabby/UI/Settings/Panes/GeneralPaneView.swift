@@ -57,42 +57,38 @@ struct GeneralPaneView: View {
                 Toggle(isOn: emojiPickerEnabledBinding) {
                     SettingsRowLabel(
                         title: "Inline Emoji Picker",
-                        description: "Type a colon and a name like :smile to pick an emoji inline, " +
-                            "then press your accept-word key (Tab by default) to insert it."
+                        description: "Type a name like :smile to search inline, then press your accept-word " +
+                            "shortcut to insert the selected emoji."
                     )
                 }
             }
 
             if suggestionSettings.isEmojiPickerEnabled {
-                Section("Emoji Customization") {
-                    Picker(selection: emojiSkinToneBinding) {
-                        ForEach(EmojiSkinTone.allCases, id: \.self) { tone in
-                            Text("\(tone.displayName)  \(tone.sampleGlyph)").tag(tone)
+                Section("Emoji Suggestions") {
+                    LabeledContent {
+                        HStack(spacing: 8) {
+                            ForEach(EmojiSkinTone.allCases, id: \.self) { tone in
+                                skinToneOption(for: tone)
+                            }
                         }
                     } label: {
                         SettingsRowLabel(
-                            title: "Preferred Skin Tone",
-                            description: "Applied to emoji that support skin tone modifiers."
+                            title: "Skin Tone",
+                            description: "For non-default tones, suggestions show your selected tone first " +
+                                "and keep the default emoji next."
                         )
                     }
 
-                    Toggle(isOn: includeNeutralEmojiVariantBinding) {
-                        SettingsRowLabel(
-                            title: "Include Neutral Variant",
-                            description: "When enabled, the neutral (default) skin tone variant is included " +
-                                "alongside your preferred skin tone in emoji suggestions."
-                        )
-                    }
-
-                    Picker(selection: emojiGenderBinding) {
-                        ForEach(EmojiGender.allCases, id: \.self) { gender in
-                            Text("\(gender.displayName)  \(gender.sampleGlyph)").tag(gender)
+                    LabeledContent {
+                        HStack(spacing: 8) {
+                            ForEach(EmojiGender.allCases, id: \.self) { gender in
+                                emojiGenderOption(for: gender)
+                            }
                         }
                     } label: {
                         SettingsRowLabel(
-                            title: "Preferred Gender",
-                            description: "Applies to people emoji that have separate male/female variants " +
-                                "(e.g., firefighters, doctors, artists)."
+                            title: "People Emoji Style",
+                            description: "Choose person, man, or woman variants when an emoji offers them."
                         )
                     }
                 }
@@ -239,20 +235,6 @@ struct GeneralPaneView: View {
         )
     }
 
-    private var includeNeutralEmojiVariantBinding: Binding<Bool> {
-        Binding(
-            get: { suggestionSettings.includeNeutralEmojiVariant },
-            set: { suggestionSettings.setIncludeNeutralEmojiVariant($0) }
-        )
-    }
-
-    private var emojiGenderBinding: Binding<EmojiGender> {
-        Binding(
-            get: { suggestionSettings.preferredEmojiGender },
-            set: { suggestionSettings.setPreferredEmojiGender($0) }
-        )
-    }
-
     private var autoAcceptTrailingPunctuationBinding: Binding<Bool> {
         Binding(
             get: { suggestionSettings.autoAcceptTrailingPunctuation },
@@ -323,6 +305,84 @@ struct GeneralPaneView: View {
                 )
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func skinToneOption(for tone: EmojiSkinTone) -> some View {
+        let isSelected = suggestionSettings.preferredEmojiSkinTone == tone
+
+        Button {
+            suggestionSettings.setPreferredEmojiSkinTone(tone)
+        } label: {
+            ZStack(alignment: .bottomTrailing) {
+                Text(tone.sampleGlyph)
+                    .font(.system(size: 19))
+                    .frame(width: 34, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.06))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(
+                                isSelected ? Color.accentColor : Color.primary.opacity(0.16),
+                                lineWidth: isSelected ? 2 : 1
+                            )
+                    )
+
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .background(Circle().fill(Color(nsColor: .controlBackgroundColor)))
+                        .offset(x: 3, y: 3)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("\(tone.displayName) skin tone")
+        .accessibilityLabel("\(tone.displayName) skin tone")
+        .accessibilityValue(isSelected ? "Selected" : "")
+    }
+
+    @ViewBuilder
+    private func emojiGenderOption(for gender: EmojiGender) -> some View {
+        let isSelected = suggestionSettings.preferredEmojiGender == gender
+
+        Button {
+            suggestionSettings.setPreferredEmojiGender(gender)
+        } label: {
+            ZStack(alignment: .bottomTrailing) {
+                Text(gender.sampleGlyph)
+                    .font(.system(size: 19))
+                    .frame(width: 34, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.06))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(
+                                isSelected ? Color.accentColor : Color.primary.opacity(0.16),
+                                lineWidth: isSelected ? 2 : 1
+                            )
+                    )
+
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .background(Circle().fill(Color(nsColor: .controlBackgroundColor)))
+                        .offset(x: 3, y: 3)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("\(gender.displayName) variant")
+        .accessibilityLabel("\(gender.displayName) variant")
+        .accessibilityValue(isSelected ? "Selected" : "")
     }
 
     private func swatchFill(for preset: GhostTextColorPreset) -> Color {
