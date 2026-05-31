@@ -23,6 +23,13 @@ final class FocusTracker {
     private var pollInterval: TimeInterval
     private let permissionProvider: @MainActor () -> Bool
     private let ignoredBundleIdentifier: String?
+    /// Returns true when the focused app's bundle should NOT have its AX tree deep-walked. The
+    /// gate runs after the cheap system-wide focused-element query but before the expensive
+    /// candidate-elements walk in `FocusSnapshotResolver`. macOS popovers (Calendar's event-detail
+    /// popover, in particular) self-dismiss when AX attribute enumeration runs against them, so
+    /// disabling Cotabby globally or for a specific app must actually stop the walk, not just
+    /// stop generating suggestions on top of it (#476).
+    private let isCaptureSuppressedForBundle: @MainActor (String?) -> Bool
     private let snapshotResolver: FocusSnapshotResolver
 
     private var timer: Timer?
@@ -45,6 +52,10 @@ final class FocusTracker {
     private var chromiumHitTestCache: (element: AXUIElement, pid: pid_t)?
     private var lastChromeProbeSignature: String?
 
+    // Last bundle identifier we logged as suppressed. Used to emit one log line per
+    // suppression transition instead of one per 50-80ms poll tick.
+    private var lastSuppressedBundleIdentifier: String?
+
     // Wakes Chromium/Electron web-accessibility trees so their web text becomes readable. Priming
     // is what turns a Chrome renderer from "AX-unaware" (omnibox-only) into a tree the focus
     // queries and hit-test fallback can actually resolve.
@@ -54,11 +65,13 @@ final class FocusTracker {
         pollInterval: TimeInterval = 0.08,
         permissionProvider: @escaping @MainActor () -> Bool,
         ignoredBundleIdentifier: String?,
+        isCaptureSuppressedForBundle: @escaping @MainActor (String?) -> Bool = { _ in false },
         snapshotResolver: FocusSnapshotResolver? = nil
     ) {
         self.pollInterval = pollInterval
         self.permissionProvider = permissionProvider
         self.ignoredBundleIdentifier = ignoredBundleIdentifier
+        self.isCaptureSuppressedForBundle = isCaptureSuppressedForBundle
         // Default resolver construction must happen inside the actor-isolated initializer body.
         // Swift evaluates default parameter expressions before entering the `@MainActor` context.
         self.snapshotResolver = snapshotResolver ?? FocusSnapshotResolver()
@@ -217,6 +230,21 @@ final class FocusTracker {
             )
         }
 
+        // Bail before any AX deep-walk when Cotabby is disabled for the focused app. Stops
+        // `FocusSnapshotResolver.resolveSnapshot` from enumerating attributes on transient popover
+        // windows (Calendar's event-detail popover dismisses itself when its AX tree is read out
+        // from underneath it — #476). The cheap `AXHelper.focusedElement()` query above is fine to
+        // run; only the candidate-elements walk hits the popover.
+        if isCaptureSuppressedForBundle(application.bundleIdentifier) {
+            noteCaptureSuppressed(for: application)
+            return inactiveCapture(
+                applicationName: application.localizedName ?? "?",
+                bundleIdentifier: application.bundleIdentifier,
+                capability: .blocked("Cotabby is disabled for this app.")
+            )
+        }
+        noteCaptureResumedIfNeeded()
+
         let resolveStart = ContinuousClock.now
         let firstPassSnapshot = snapshotResolver.resolveSnapshot(
             focusedElement: focusedElement,
@@ -321,6 +349,28 @@ final class FocusTracker {
         let line = "Resolve timing: app=\(application.localizedName ?? "?") "
             + "resolveMs=\(String(format: "%.1f", millis)) caret=\(source) cache=[\(stats)]"
         CotabbyLogger.focus.debug("\(line)")
+    }
+
+    /// Emits one log line per suppression transition. The gate is consulted on every poll tick, so
+    /// without dedupe this would write ~12-20 lines/second for as long as the user stays in the
+    /// disabled app.
+    private func noteCaptureSuppressed(for application: NSRunningApplication) {
+        let bundleIdentifier = application.bundleIdentifier
+        guard lastSuppressedBundleIdentifier != bundleIdentifier else {
+            return
+        }
+        lastSuppressedBundleIdentifier = bundleIdentifier
+        let name = application.localizedName ?? "?"
+        let id = bundleIdentifier ?? "no bundle id"
+        CotabbyLogger.focus.info("Focus capture suppressed for \(name) (\(id))")
+    }
+
+    private func noteCaptureResumedIfNeeded() {
+        guard lastSuppressedBundleIdentifier != nil else {
+            return
+        }
+        lastSuppressedBundleIdentifier = nil
+        CotabbyLogger.focus.info("Focus capture resumed")
     }
 
     private func inactiveCapture(

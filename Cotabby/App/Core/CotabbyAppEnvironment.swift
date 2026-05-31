@@ -64,9 +64,22 @@ final class CotabbyAppEnvironment {
         inputMonitor.onGlobalToggleHotkey = { [weak suggestionSettings] in
             suggestionSettings?.toggleGloballyEnabled()
         }
+        // Stop the deep AX walk when Cotabby is disabled for the focused app. Without this the
+        // focus poll keeps enumerating the frontmost app's AX attributes every 50-80ms even after
+        // the user toggles Cotabby off, which can dismiss transient popovers in apps like Calendar
+        // (#476). Gating here also makes the "I disabled it but the bug remained" symptom go away:
+        // the disable toggles now actually stop touching the focused app.
         let focusModel = FocusTrackingModel(
             permissionProvider: { permissionManager.accessibilityGranted },
             ignoredBundleIdentifier: Bundle.main.bundleIdentifier,
+            isCaptureSuppressedForBundle: { bundleIdentifier in
+                guard suggestionSettings.isGloballyEnabled else { return true }
+                if let bundleIdentifier,
+                   suggestionSettings.isApplicationDisabled(bundleIdentifier: bundleIdentifier) {
+                    return true
+                }
+                return false
+            },
             publishesPollingEvents: FocusDebugOverlayController.isEnabled
         )
         // The snapshot is poll-based, so after a fast app switch the closure may briefly

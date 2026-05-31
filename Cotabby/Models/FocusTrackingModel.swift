@@ -20,12 +20,14 @@ final class FocusTrackingModel: ObservableObject {
     init(
         permissionProvider: @escaping @MainActor () -> Bool,
         ignoredBundleIdentifier: String?,
+        isCaptureSuppressedForBundle: @escaping @MainActor (String?) -> Bool = { _ in false },
         publishesPollingEvents: Bool = false
     ) {
         self.ignoredBundleIdentifier = ignoredBundleIdentifier
         tracker = FocusTracker(
             permissionProvider: permissionProvider,
-            ignoredBundleIdentifier: ignoredBundleIdentifier
+            ignoredBundleIdentifier: ignoredBundleIdentifier,
+            isCaptureSuppressedForBundle: isCaptureSuppressedForBundle
         )
         snapshot = tracker.snapshot
         latestExternalApplication = tracker.snapshot.externalApplicationIdentity(
