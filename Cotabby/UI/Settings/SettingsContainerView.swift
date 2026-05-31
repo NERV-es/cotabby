@@ -98,6 +98,7 @@ struct SettingsContainerView: View {
         case .general:
             GeneralPaneView(
                 suggestionSettings: suggestionSettings,
+                launchAtLoginService: launchAtLoginService,
                 onShowWelcome: onShowWelcome
             )
         case .engineAndModel:
