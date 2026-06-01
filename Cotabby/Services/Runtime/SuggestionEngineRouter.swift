@@ -10,33 +10,75 @@ final class SuggestionEngineRouter {
     private let suggestionSettings: SuggestionSettingsModel
     private let foundationModelEngine: any SuggestionGenerating
     private let llamaEngine: any SuggestionGenerating
+    private let performanceMetricsStore: PerformanceMetricsStore
+    /// Closure that returns the currently selected llama model filename (e.g. `Qwen3-0.6B-Q8_0.gguf`).
+    /// A closure instead of a direct `LlamaRuntimeManager` reference keeps the router from depending
+    /// on the concrete runtime type — useful for tests that want to fake the model label.
+    private let llamaModelNameProvider: @MainActor () -> String?
 
     init(
         suggestionSettings: SuggestionSettingsModel,
         foundationModelEngine: any SuggestionGenerating,
-        llamaEngine: any SuggestionGenerating
+        llamaEngine: any SuggestionGenerating,
+        performanceMetricsStore: PerformanceMetricsStore,
+        llamaModelNameProvider: @escaping @MainActor () -> String?
     ) {
         self.suggestionSettings = suggestionSettings
         self.foundationModelEngine = foundationModelEngine
         self.llamaEngine = llamaEngine
+        self.performanceMetricsStore = performanceMetricsStore
+        self.llamaModelNameProvider = llamaModelNameProvider
     }
 
     func generateSuggestion(for request: SuggestionRequest) async throws -> SuggestionResult {
+        let metadata: Logger.Metadata = [
+            "request_id": .string(request.requestID),
+            "engine": .string(engineMetadataLabel(for: suggestionSettings.selectedEngine))
+        ]
         switch suggestionSettings.selectedEngine {
         case .appleIntelligence:
-            CotabbyLogger.suggestion.debug("Routing to Apple Intelligence engine")
+            CotabbyLogger.suggestion.debug("Routing to Apple Intelligence engine", metadata: metadata)
             do {
-                return try await foundationModelEngine.generateSuggestion(for: request)
+                let result = try await foundationModelEngine.generateSuggestion(for: request)
+                recordPerformanceMetric(modelName: "Apple Intelligence", latency: result.latency)
+                return result
             } catch SuggestionClientError.unsupportedLanguageOrLocale(let message) {
-                CotabbyLogger.suggestion.info("Apple Intelligence unsupported for locale, falling back to open-source: \(message)")
+                CotabbyLogger.suggestion.info(
+                    "Apple Intelligence unsupported for locale, falling back to open-source: \(message)",
+                    metadata: metadata.merging([
+                        "fallback_engine": .string("llama"),
+                        "reason": .string(message)
+                    ]) { _, new in new }
+                )
                 return try await generateOpenSourceFallback(
                     for: request,
                     appleFailureMessage: message
                 )
             }
         case .llamaOpenSource:
-            CotabbyLogger.suggestion.debug("Routing to open-source llama engine")
-            return try await llamaEngine.generateSuggestion(for: request)
+            CotabbyLogger.suggestion.debug("Routing to open-source llama engine", metadata: metadata)
+            let result = try await llamaEngine.generateSuggestion(for: request)
+            recordPerformanceMetric(modelName: llamaModelNameProvider() ?? "Llama", latency: result.latency)
+            return result
+        }
+    }
+
+    /// Persists one (timestamp, model, latency) triple into the rolling ring buffer when the
+    /// Performance pane toggle is on. The router is the right home for this seam because it is
+    /// the single point that sees a finished `SuggestionResult` and knows which engine produced
+    /// it — both engines below would otherwise need to take a dependency on the metrics store.
+    private func recordPerformanceMetric(modelName: String, latency: TimeInterval) {
+        guard suggestionSettings.isPerformanceTrackingEnabled else { return }
+        let latencyMs = Int((latency * 1000).rounded())
+        performanceMetricsStore.record(modelName: modelName, latencyMs: latencyMs)
+    }
+
+    private func engineMetadataLabel(for kind: SuggestionEngineKind) -> String {
+        switch kind {
+        case .appleIntelligence:
+            return "apple_intelligence"
+        case .llamaOpenSource:
+            return "llama"
         }
     }
 
@@ -68,7 +110,9 @@ final class SuggestionEngineRouter {
         appleFailureMessage: String
     ) async throws -> SuggestionResult {
         do {
-            return try await llamaEngine.generateSuggestion(for: request)
+            let result = try await llamaEngine.generateSuggestion(for: request)
+            recordPerformanceMetric(modelName: llamaModelNameProvider() ?? "Llama", latency: result.latency)
+            return result
         } catch SuggestionClientError.cancelled {
             throw SuggestionClientError.cancelled
         } catch {

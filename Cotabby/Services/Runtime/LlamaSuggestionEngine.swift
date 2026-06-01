@@ -22,12 +22,21 @@ final class LlamaSuggestionEngine {
     /// Executes one generation request and packages the raw and normalized result for the coordinator.
     /// When tree decode is enabled, generates multiple candidates and returns alternatives.
     func generateSuggestion(for request: SuggestionRequest) async throws -> SuggestionResult {
+        let baseMetadata: Logger.Metadata = [
+            "request_id": .string(request.requestID),
+            "engine": .string("llama")
+        ]
         do {
             let startTime = Date()
             let cachedPrefixBytes = promptCacheHintTracker.cachedPrefixBytes(for: request)
             let hintDesc = cachedPrefixBytes.map(String.init) ?? "none"
             CotabbyLogger.suggestion.debug(
-                "Llama generating: prompt=\(request.prompt.count)B cache_hint=\(hintDesc) max_tokens=\(request.maxPredictionTokens)"
+                "Llama generating",
+                metadata: baseMetadata.merging([
+                    "prompt_bytes": .stringConvertible(request.prompt.count),
+                    "cache_hint_bytes": .string(hintDesc),
+                    "max_tokens": .stringConvertible(request.maxPredictionTokens)
+                ]) { _, new in new }
             )
 
             let options = LlamaGenerationOptions(
@@ -65,7 +74,12 @@ final class LlamaSuggestionEngine {
             let latencyMs = Int(latency * 1000)
             let altCount = normalizedAlternatives.count
             CotabbyLogger.suggestion.debug(
-                "Llama tree decode: primary=\(normalizedPrimary.count) chars, \(altCount) alternatives, latency=\(latencyMs)ms"
+                "Llama tree decode",
+                metadata: [
+                    "primary_chars": .stringConvertible(normalizedPrimary.count),
+                    "alternatives": .stringConvertible(altCount),
+                    "latency_ms": .stringConvertible(latencyMs)
+                ]
             )
             return SuggestionResult(
                 generation: request.generation,
@@ -75,18 +89,27 @@ final class LlamaSuggestionEngine {
                 alternatives: normalizedAlternatives
             )
         } catch is CancellationError {
-            CotabbyLogger.suggestion.debug("Llama generation cancelled")
+            CotabbyLogger.suggestion.debug("Llama generation cancelled", metadata: baseMetadata)
             throw SuggestionClientError.cancelled
         } catch let error as LlamaRuntimeError {
-            CotabbyLogger.suggestion.error("Llama runtime error, resetting cache: \(error.localizedDescription)")
+            CotabbyLogger.suggestion.error(
+                "Llama runtime error, resetting cache: \(error.localizedDescription)",
+                metadata: baseMetadata
+            )
             await resetCachedGenerationContext()
             throw SuggestionClientError.unavailable(error.localizedDescription)
         } catch let error as SuggestionClientError {
-            CotabbyLogger.suggestion.error("Suggestion client error, resetting cache: \(error.localizedDescription)")
+            CotabbyLogger.suggestion.error(
+                "Suggestion client error, resetting cache: \(error.localizedDescription)",
+                metadata: baseMetadata
+            )
             await resetCachedGenerationContext()
             throw error
         } catch {
-            CotabbyLogger.suggestion.error("Unexpected generation error, resetting cache: \(error.localizedDescription)")
+            CotabbyLogger.suggestion.error(
+                "Unexpected generation error, resetting cache: \(error.localizedDescription)",
+                metadata: baseMetadata
+            )
             await resetCachedGenerationContext()
             throw SuggestionClientError.generationFailed(error.localizedDescription)
         }

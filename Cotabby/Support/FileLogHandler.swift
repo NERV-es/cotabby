@@ -7,9 +7,11 @@ import Logging
 /// directly without copy-pasting from Console.app.
 ///
 /// The handler is only installed when `-cotabby-debug` is passed at launch (see
-/// `CotabbyLogger.bootstrap`). When the file grows past `sizeCapBytes` it is wiped to zero
-/// and a fresh tail begins — the user opted into "everything since the last cap" semantics
-/// rather than rotation, which is simpler to reason about and to ingest.
+/// `CotabbyLogger.bootstrap`). When the file grows past `sizeCapBytes` it is rotated: the
+/// current file becomes `cotabby.jsonl.1` (overwriting any prior rotation) and a fresh empty
+/// `cotabby.jsonl` is opened. The previous truncate-to-zero behavior threw away the *most
+/// recent* history at exactly the moment a debugger most needed it; one-step rotation keeps
+/// roughly the last 2× cap of events on disk.
 
 /// Shared writer that owns the on-disk file handle. swift-log can call handlers from any
 /// thread, so an `NSLock` serializes writes and the size check that may trigger a wipe.
@@ -47,12 +49,12 @@ final class FileLogWriter: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        // Wiping when *already over* the cap means the line that pushes us past gets stored
+        // Rotating when *already over* the cap means the line that pushes us past gets stored
         // in the new file rather than the old one. That keeps the file's tail readable.
-        // The wipe replaces `self.handle`, so we must read it AFTER the check — binding it
+        // The rotation replaces `self.handle`, so we must read it AFTER the check — binding it
         // before would write the first post-cap line into a closed descriptor and drop it.
         if currentByteOffset >= effectiveCap {
-            wipeLocked()
+            rotateLocked()
         }
 
         guard let handle else { return }
@@ -65,14 +67,14 @@ final class FileLogWriter: @unchecked Sendable {
         }
     }
 
-    /// Test-only hook to force a wipe.
+    /// Test-only hook to force a rotation.
     func wipeForTesting() {
         lock.lock()
         defer { lock.unlock() }
-        wipeLocked()
+        rotateLocked()
     }
 
-    private func wipeLocked() {
+    private func rotateLocked() {
         guard let logFileURL else { return }
         do {
             try handle?.close()
@@ -80,10 +82,39 @@ final class FileLogWriter: @unchecked Sendable {
             // Closing a stale handle should not block re-opening a fresh one.
         }
         handle = nil
-        // Truncating to zero is cheaper than delete-and-recreate and keeps any open `tail -f`
-        // following the same inode.
-        FileManager.default.createFile(atPath: logFileURL.path, contents: nil)
+        // One-step rotation: move the current file to `*.jsonl.1`, overwriting any prior rotation,
+        // then open a fresh empty file. Keeps the most recent ~cap of history on disk that the
+        // previous truncate-to-zero behavior was dropping at the exact moment it was useful.
+        // Only create a fresh empty file when the rotation actually displaced the old one — see
+        // `rotateOnDisk`. Otherwise we would silently overwrite the still-present log with an
+        // empty file, destroying exactly the history rotation was meant to preserve.
+        let didRotate = rotateOnDisk(currentURL: logFileURL)
+        if didRotate {
+            FileManager.default.createFile(atPath: logFileURL.path, contents: nil)
+        }
         openHandleLocked()
+    }
+
+    /// Returns `true` when the current file was successfully moved aside (or did not exist in the
+    /// first place, which makes "create a fresh empty file" the correct next step). Returns
+    /// `false` only when the source still occupies `currentURL` after the attempted move; the
+    /// caller must then skip the `createFile` step so it does not destroy live log data.
+    private func rotateOnDisk(currentURL: URL) -> Bool {
+        let fileManager = FileManager.default
+        let rotatedURL = currentURL.deletingPathExtension()
+            .appendingPathExtension("jsonl.1")
+        if fileManager.fileExists(atPath: rotatedURL.path) {
+            try? fileManager.removeItem(at: rotatedURL)
+        }
+        guard fileManager.fileExists(atPath: currentURL.path) else {
+            return true
+        }
+        do {
+            try fileManager.moveItem(at: currentURL, to: rotatedURL)
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func openHandle() {
@@ -140,6 +171,9 @@ struct FileLogHandler: LogHandler {
 
     func log(event: borrowing Logging.LogEvent) {
         let category = Self.category(from: label)
+        // swift-log's `LogEvent` does not carry an emission timestamp, so the handler must stamp
+        // its own. Under sustained load this can lag the call site by a small number of ms; live
+        // with that until swift-log surfaces emission time on the event itself.
         let timestamp = ISO8601DateFormatter.shared.string(from: Date())
 
         var record: [String: Any] = [

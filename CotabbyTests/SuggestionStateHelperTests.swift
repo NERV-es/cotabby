@@ -127,7 +127,8 @@ final class SuggestionInteractionStateTests: XCTestCase {
                     text: " world again",
                     geometry: CotabbyTestFixtures.overlayGeometry(caretRect: context.caretRect),
                     mode: .inline
-                )
+                ),
+                granularity: .word
             )
 
             guard case let .ready(liveContext, session, acceptedChunk) = preparation else {
@@ -152,7 +153,8 @@ final class SuggestionInteractionStateTests: XCTestCase {
                     text: " different",
                     geometry: CotabbyTestFixtures.overlayGeometry(caretRect: context.caretRect),
                     mode: .inline
-                )
+                ),
+                granularity: .word
             )
 
             guard case let .invalid(reason) = preparation else {
@@ -180,7 +182,8 @@ final class SuggestionInteractionStateTests: XCTestCase {
                     processIdentifier: 123,
                     precedingText: "Different live text"
                 ),
-                overlayState: .hidden(reason: "waiting for caret sync")
+                overlayState: .hidden(reason: "waiting for caret sync"),
+                granularity: .word
             )
 
             guard case let .ready(_, _, acceptedChunk) = preparation else {
@@ -188,6 +191,35 @@ final class SuggestionInteractionStateTests: XCTestCase {
                 return
             }
             XCTAssertEqual(acceptedChunk, " world")
+        }
+    }
+
+    func test_prepareAcceptance_phraseGranularityAcceptsThroughSentenceTerminator() {
+        runOnMainActor {
+            let state = makeState()
+            let context = CotabbyTestFixtures.focusedInputContext(precedingText: "Hello")
+            _ = state.startSession(fullText: " hello world. next", liveContext: context, latency: 0.1)
+            let snapshot = CotabbyTestFixtures.focusedInputSnapshot(precedingText: "Hello")
+
+            let preparation = state.prepareAcceptance(
+                from: snapshot,
+                overlayState: .visible(
+                    text: " hello world. next",
+                    geometry: CotabbyTestFixtures.overlayGeometry(caretRect: context.caretRect),
+                    mode: .inline
+                ),
+                granularity: .phrase
+            )
+
+            guard case let .ready(_, session, acceptedChunk) = preparation else {
+                XCTFail("Expected phrase acceptance to be ready")
+                return
+            }
+            // Phrase mode must delegate to nextAcceptancePhrase: the accepted chunk spans every word
+            // up to the sentence terminator, not just the first word a .word accept would take.
+            XCTAssertEqual(session.remainingText, " hello world. next")
+            XCTAssertEqual(acceptedChunk, " hello world.")
+            XCTAssertEqual(SuggestionSessionReconciler.nextAcceptanceChunk(from: session.remainingText), " hello")
         }
     }
 

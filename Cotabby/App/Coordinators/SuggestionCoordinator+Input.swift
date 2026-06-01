@@ -129,6 +129,19 @@ extension SuggestionCoordinator {
     }
 
     func handleInputEvent(_ event: CapturedInputEvent) -> Bool {
+        // Give the emoji picker first look at every keystroke so it can drive its trigger state
+        // machine. When a capture is involved, the picker owns the interaction: the suggestion
+        // pipeline stands down and any lingering ghost text is cleared so it does not show behind the
+        // panel. Consumption still happens through the active tap's `emojiCaptureKeyDecider`.
+        if emojiInputObserver?(event) == true {
+            if overlayState.isVisible || interactionState.activeSession != nil {
+                cancelPredictionWork()
+                clearSuggestion(clearDiagnostics: true)
+                hideOverlay(reason: "Overlay hidden because the emoji picker is active.")
+            }
+            return false
+        }
+
         if let disabledReason = SuggestionAvailabilityEvaluator.disabledReason(
             globallyEnabled: settingsSnapshot.isGloballyEnabled,
             disabledAppBundleIdentifiers: settingsSnapshot.disabledAppBundleIdentifiers,
@@ -141,11 +154,11 @@ extension SuggestionCoordinator {
         }
 
         if event.kind == .acceptance {
-            return acceptCurrentSuggestion(originalEvent: event)
+            return acceptCurrentSuggestion()
         }
 
         if event.kind == .fullAcceptance {
-            return acceptEntireSuggestion(originalEvent: event)
+            return acceptEntireSuggestion()
         }
 
         if event.kind == .cycleNext {
@@ -192,6 +205,12 @@ extension SuggestionCoordinator {
     /// burning CPU on AX queries that are themselves 5–15ms each.
     private static let hostPublishPollIntervalMs = 30
 
+    /// First-retry interval after the immediate (elapsed 0) poll, which runs inside the keystroke's
+    /// own tap callback before the host has even processed the key and therefore always misses. A
+    /// short first retry catches fast-publishing native apps in ~10ms instead of making them wait a
+    /// full steady interval; slow Chromium hosts fall through to `hostPublishPollIntervalMs` below.
+    private static let hostPublishFirstPollIntervalMs = 10
+
     /// Schedules a fresh prediction once the host app has actually published the new
     /// contenteditable text to AX. The previous fix waited a fixed 150ms — see PR #376 — but the
     /// logs in #381 showed Chromium's publish lag can exceed that ceiling on a busy page, so the
@@ -203,49 +222,81 @@ extension SuggestionCoordinator {
     /// at `hostPublishWaitCeilingMs` so a silent host can't hang the pipeline — once the cap is
     /// reached we generate against whatever's there, matching the old fixed-delay behavior.
     /// `schedulePrediction()` internally `replaceDebouncedWork`s, so back-to-back keystrokes
-    /// still collapse cleanly.
-    private func schedulePredictionAfterHostPublishDelay() {
-        hostPublishPollTask?.cancel()
+    /// still collapse cleanly. The `hostPublishPollGeneration` token adds the missing outer
+    /// coalescing layer: only the newest keystroke's polling chain may keep reading AX.
+    func schedulePredictionAfterHostPublishDelay() {
+        hostPublishPollGeneration &+= 1
+        let pollGeneration = hostPublishPollGeneration
         let baseline = focusModel.snapshot.context
-        hostPublishPollTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.pollForHostPublishAsync(
+
+        // The event tap fires before the host processes the key, so an immediate `refreshNow()`
+        // almost always reads the pre-keystroke value while still paying the full AX cost. Start at
+        // the first retry instead; this keeps fast native fields responsive and removes one
+        // guaranteed-stale read from every keypress.
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + .milliseconds(Self.hostPublishFirstPollIntervalMs)
+        ) { [weak self] in
+            self?.pollForHostPublish(
                 baselineText: baseline?.precedingText,
                 baselineElementID: baseline?.elementIdentifier,
-                baselineSelectionLocation: baseline?.selection.location
+                baselineSelectionLocation: baseline?.selection.location,
+                pollGeneration: pollGeneration,
+                elapsedMs: Self.hostPublishFirstPollIntervalMs
             )
         }
     }
 
-    /// Async poll loop that replaces the recursive DispatchQueue.main.asyncAfter approach.
-    /// Cancellation is cooperative via Task.isCancelled, so back-to-back keystrokes or
-    /// coordinator shutdown cleanly stop stale polls.
-    private func pollForHostPublishAsync(
+    /// Drives the snapshot-changed gate. Reads the live focus snapshot, fires `schedulePrediction`
+    /// as soon as any of the captured baseline fields move on, and otherwise tail-calls itself
+    /// after `hostPublishPollIntervalMs` until the ceiling is hit.
+    private func pollForHostPublish(
         baselineText: String?,
         baselineElementID: String?,
-        baselineSelectionLocation: Int?
-    ) async {
-        var elapsedMs = 0
+        baselineSelectionLocation: Int?,
+        pollGeneration: UInt64,
+        elapsedMs: Int
+    ) {
+        guard pollGeneration == hostPublishPollGeneration else {
+            return
+        }
 
-        while !Task.isCancelled {
-            focusModel.refreshNow()
-            let currentContext = focusModel.snapshot.context
+        focusModel.refreshNow()
+        guard pollGeneration == hostPublishPollGeneration else {
+            return
+        }
 
-            let textChanged = currentContext?.precedingText != baselineText
-            let elementChanged = currentContext?.elementIdentifier != baselineElementID
-            let selectionChanged = currentContext?.selection.location != baselineSelectionLocation
-            if textChanged || elementChanged || selectionChanged {
-                schedulePrediction()
-                return
-            }
+        let currentContext = focusModel.snapshot.context
 
-            elapsedMs += Self.hostPublishPollIntervalMs
-            guard elapsedMs < Self.hostPublishWaitCeilingMs else {
-                schedulePrediction()
-                return
-            }
+        // No focus context at all means the user moved away from any editable field — let
+        // `schedulePrediction` and its downstream guards handle the disabled / unsupported state.
+        let textChanged = currentContext?.precedingText != baselineText
+        let elementChanged = currentContext?.elementIdentifier != baselineElementID
+        let selectionChanged = currentContext?.selection.location != baselineSelectionLocation
+        if textChanged || elementChanged || selectionChanged {
+            schedulePrediction()
+            return
+        }
 
-            try? await Task.sleep(nanoseconds: UInt64(Self.hostPublishPollIntervalMs) * 1_000_000)
+        // Ceiling: stop polling and generate anyway. Without this fallback a host that genuinely
+        // produces no AX change (rare but possible — e.g. dead-key composition) would never get
+        // its next prediction.
+        // We already waited the short first interval before entering this method; remaining polls
+        // use the steady cadence until the ceiling.
+        let interval = Self.hostPublishPollIntervalMs
+        let nextElapsed = elapsedMs + interval
+        guard nextElapsed < Self.hostPublishWaitCeilingMs else {
+            schedulePrediction()
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(interval)) { [weak self] in
+            self?.pollForHostPublish(
+                baselineText: baselineText,
+                baselineElementID: baselineElementID,
+                baselineSelectionLocation: baselineSelectionLocation,
+                pollGeneration: pollGeneration,
+                elapsedMs: nextElapsed
+            )
         }
     }
 

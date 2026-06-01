@@ -2,6 +2,22 @@ import ApplicationServices
 import Combine
 import Foundation
 
+/// Identifies one of the three user-configurable keyboard shortcuts so the recorder can ask which
+/// other action (if any) already owns a proposed key combination before committing it.
+enum ShortcutAction: CaseIterable {
+    case acceptWord
+    case acceptEntireSuggestion
+    case toggleTabby
+
+    var displayName: String {
+        switch self {
+        case .acceptWord: return "Accept Word"
+        case .acceptEntireSuggestion: return "Accept Entire Suggestion"
+        case .toggleTabby: return "Toggle Tabby"
+        }
+    }
+}
+
 /// File overview:
 /// Owns the durable autocomplete preferences that are shared across the app:
 /// engine selection, completion length, indicator appearance, and profile
@@ -23,14 +39,31 @@ final class SuggestionSettingsModel: ObservableObject {
     @Published private(set) var selectedWordCountPreset: SuggestionWordCountPreset
     @Published private(set) var isClipboardContextEnabled: Bool
     @Published private(set) var isFastModeEnabled: Bool
+    /// Whether the Performance pane is recording per-request latency. Defaults to false so the
+    /// default user never pays any extra storage or write cost — recording only kicks in once the
+    /// user opts in from Settings.
+    @Published private(set) var isPerformanceTrackingEnabled: Bool
+    /// Whether the accepted-word counter is drawn next to the menu bar icon. Off hides the badge
+    /// entirely; the count itself keeps accruing so toggling it back on restores the running total.
+    @Published private(set) var isMenuBarWordCountVisible: Bool
     /// How suggestions are presented (inline ghost text vs popup card vs auto).
     @Published private(set) var mirrorPreference: MirrorPreference
     @Published private(set) var userName: String
     @Published private(set) var customRules: [String]
     @Published private(set) var responseLanguages: [String]
+    /// Free-form user-authored context (glossary, jargon, style notes) injected into every
+    /// completion request. Empty string when unset. Trimmed and length-capped on write so an
+    /// accidental paste of a huge document can't blow out the model's context window.
+    @Published private(set) var extendedContext: String
     @Published private(set) var debounceMilliseconds: Int
     @Published private(set) var focusPollIntervalMilliseconds: Int
     @Published private(set) var isMultiLineEnabled: Bool
+    /// Whether the inline `:emoji:` picker is active. Read live by `EmojiPickerController` at event
+    /// time, so toggling it takes effect on the next keystroke without restarting capture.
+    @Published private(set) var isEmojiPickerEnabled: Bool
+    /// Emoji-customization preferences, read live by the picker's variant resolver at match time.
+    @Published private(set) var preferredEmojiSkinTone: EmojiSkinTone
+    @Published private(set) var preferredEmojiGender: EmojiGender
     @Published private(set) var autoAcceptTrailingPunctuation: Bool
     /// Number of tree decode candidates to generate (1 = disabled, 2-4 = enabled).
     @Published private(set) var treeCandidateCount: Int
@@ -40,6 +73,12 @@ final class SuggestionSettingsModel: ObservableObject {
     @Published private(set) var fullAcceptanceKeyCode: CGKeyCode
     @Published private(set) var fullAcceptanceKeyModifiers: ShortcutModifierMask
     @Published private(set) var fullAcceptanceKeyLabel: String
+    /// User-configurable hotkey that flips `isGloballyEnabled`. Defaults to unbound so the user has
+    /// to opt in; without a binding the listener tap for this hotkey is never installed.
+    @Published private(set) var globalToggleKeyCode: CGKeyCode
+    @Published private(set) var globalToggleKeyModifiers: ShortcutModifierMask
+    @Published private(set) var globalToggleKeyLabel: String
+    @Published private(set) var acceptanceGranularity: AcceptanceGranularity
     private let userDefaults: UserDefaults
 
     private static let isGloballyEnabledDefaultsKey = "cotabbyGloballyEnabled"
@@ -51,17 +90,26 @@ final class SuggestionSettingsModel: ObservableObject {
     private static let ghostTextOpacityDefaultsKey = "cotabbyGhostTextOpacity"
     private static let selectedEngineDefaultsKey = "cotabbySelectedEngine"
     private static let selectedWordCountPresetDefaultsKey = "cotabbySelectedWordCountPreset"
+    /// Pre-#475 raw value for the shortest length tier. Kept here only so the read path can
+    /// rewrite it to `.fourToSeven` on launch; never re-emitted to UserDefaults.
+    private static let legacyShortPresetRawValue = "3-7"
     private static let clipboardContextEnabledDefaultsKey = "cotabbyClipboardContextEnabled"
     private static let fastModeEnabledDefaultsKey = "cotabbyFastModeEnabled"
+    private static let performanceTrackingEnabledDefaultsKey = "cotabbyPerformanceTrackingEnabled"
+    private static let menuBarWordCountVisibleDefaultsKey = "cotabbyMenuBarWordCountVisible"
     private static let mirrorPreferenceDefaultsKey = "cotabbyMirrorPreference"
     private static let userNameDefaultsKey = "cotabbyUserName"
     private static let customRulesDefaultsKey = "cotabbyCustomRules"
+    private static let extendedContextDefaultsKey = "cotabbyExtendedContext"
     private static let responseLanguagesDefaultsKey = "cotabbyResponseLanguages"
     /// Legacy single-select key, read once to migrate the previous value into `responseLanguages`.
     private static let legacyResponseLanguageDefaultsKey = "cotabbyResponseLanguage"
     private static let debounceMillisecondsDefaultsKey = "cotabbyDebounceMilliseconds"
     private static let focusPollIntervalMillisecondsDefaultsKey = "cotabbyFocusPollIntervalMilliseconds"
     private static let multiLineEnabledDefaultsKey = "cotabbyMultiLineEnabled"
+    private static let emojiPickerEnabledDefaultsKey = "cotabbyEmojiPickerEnabled"
+    private static let preferredEmojiSkinToneDefaultsKey = "cotabbyPreferredEmojiSkinTone"
+    private static let preferredEmojiGenderDefaultsKey = "cotabbyPreferredEmojiGender"
     private static let autoAcceptTrailingPunctuationDefaultsKey = "cotabbyAutoAcceptTrailingPunctuation"
     private static let treeCandidateCountDefaultsKey = "cotabbyTreeCandidateCount"
     private static let acceptanceKeyCodeDefaultsKey = "cotabbyAcceptanceKeyCode"
@@ -70,6 +118,10 @@ final class SuggestionSettingsModel: ObservableObject {
     private static let fullAcceptanceKeyCodeDefaultsKey = "cotabbyFullAcceptanceKeyCode"
     private static let fullAcceptanceKeyModifiersDefaultsKey = "cotabbyFullAcceptanceKeyModifiers"
     private static let fullAcceptanceKeyLabelDefaultsKey = "cotabbyFullAcceptanceKeyLabel"
+    private static let globalToggleKeyCodeDefaultsKey = "cotabbyGlobalToggleKeyCode"
+    private static let globalToggleKeyModifiersDefaultsKey = "cotabbyGlobalToggleKeyModifiers"
+    private static let globalToggleKeyLabelDefaultsKey = "cotabbyGlobalToggleKeyLabel"
+    private static let acceptanceGranularityDefaultsKey = "cotabbyAcceptanceGranularity"
 
     static let defaultAcceptanceKeyCode: CGKeyCode = 48
     static let defaultAcceptanceKeyLabel = "Tab"
@@ -88,6 +140,13 @@ final class SuggestionSettingsModel: ObservableObject {
     static let maximumGhostTextOpacity: Double = 1.0
     static let defaultGhostTextOpacity: Double = 1.0
     static let ghostTextOpacityStep: Double = 0.1
+
+    /// Hard upper bound on the persisted Extended Context blob, in characters. Sized so the user
+    /// can paste a meaningful glossary or style guide without crowding the model's shared context:
+    /// roughly ~1000 tokens of English, which still leaves headroom for instructions, prefix text,
+    /// clipboard, and visual context inside Apple's 4096-token window. Larger pastes are truncated
+    /// at write time so the cost is bounded on every subsequent request.
+    static let maximumExtendedContextCharacters: Int = 4_000
 
     init(
         configuration: SuggestionConfiguration,
@@ -117,16 +176,31 @@ final class SuggestionSettingsModel: ObservableObject {
             .string(forKey: Self.selectedEngineDefaultsKey)
             .flatMap(SuggestionEngineKind.init(rawValue:))
             ?? .llamaOpenSource
-        let resolvedWordCountPreset = userDefaults
-            .string(forKey: Self.selectedWordCountPresetDefaultsKey)
-            .flatMap(SuggestionWordCountPreset.init(rawValue:))
-            ?? configuration.defaultWordCountPreset
+        let resolvedWordCountPreset: SuggestionWordCountPreset = {
+            let storedRaw = userDefaults.string(forKey: Self.selectedWordCountPresetDefaultsKey)
+            // Migrate the retired "3-7" raw value to its replacement "4-7" so users who picked
+            // the short preset don't silently jump to the default after #475 split the short
+            // tier into 2-4 and 4-7.
+            if storedRaw == Self.legacyShortPresetRawValue {
+                return .fourToSeven
+            }
+            return storedRaw.flatMap(SuggestionWordCountPreset.init(rawValue:))
+                ?? configuration.defaultWordCountPreset
+        }()
         let resolvedClipboardContextEnabled =
             userDefaults.object(forKey: Self.clipboardContextEnabledDefaultsKey) as? Bool ?? false
         // Defaults to false so the visual-context pipeline keeps running for existing users; opting
         // into fast mode turns it off.
         let resolvedFastModeEnabled =
             userDefaults.object(forKey: Self.fastModeEnabledDefaultsKey) as? Bool ?? false
+        // Defaults to false so the metrics ring buffer stays empty until the user explicitly opts
+        // in from the Performance pane.
+        let resolvedPerformanceTrackingEnabled =
+            userDefaults.object(forKey: Self.performanceTrackingEnabledDefaultsKey) as? Bool ?? false
+        // Default to visible so existing installs keep the running-word-count badge they're used
+        // to seeing. The toggle lets users who find the badge noisy hide it from the menu bar.
+        let resolvedMenuBarWordCountVisible =
+            userDefaults.object(forKey: Self.menuBarWordCountVisibleDefaultsKey) as? Bool ?? true
         // Default `.auto` keeps existing users on the byte-for-byte original inline rendering for
         // hosts that report exact/derived caret geometry; only `.estimated` hosts see the new popup
         // card. Power users can pin one mode from Settings or the menu bar.
@@ -152,6 +226,10 @@ final class SuggestionSettingsModel: ObservableObject {
             CustomRulesCatalog.normalize(userDefaults.stringArray(forKey: Self.customRulesDefaultsKey) ?? [])
         }
 
+        let resolvedExtendedContext = Self.normalizedExtendedContext(
+            userDefaults.string(forKey: Self.extendedContextDefaultsKey) ?? ""
+        )
+
         // Prefer the multi-language value once the user has touched it (key present, even if empty).
         // Otherwise migrate the previous single-select choice exactly once; a fresh install gets the
         // empty default.
@@ -166,19 +244,29 @@ final class SuggestionSettingsModel: ObservableObject {
         let resolvedDebounceMilliseconds: Int = {
             let raw = userDefaults.object(forKey: Self.debounceMillisecondsDefaultsKey) as? Int
                 ?? configuration.debounceMilliseconds
-            return max(10, min(500, raw))
+            // Existing installs may have the old 50ms first-launch default persisted. Cap at the
+            // shipped default so the latency improvement reaches them — the stepper is hidden from
+            // the UI today, so any persisted value is a previous default rather than a user choice.
+            let capped = min(raw, configuration.debounceMilliseconds)
+            return max(10, min(500, capped))
         }()
         let resolvedFocusPollIntervalMilliseconds: Int = {
             let raw = userDefaults.object(forKey: Self.focusPollIntervalMillisecondsDefaultsKey) as? Int
                 ?? configuration.focusPollIntervalMilliseconds
-            // Existing installs may have the old 50ms first-launch default persisted. Floor at the
-            // shipped default so the hotfix bump reaches them — the stepper is hidden from the UI,
-            // so the persisted value is always the previous default, never a user-chosen override.
-            let floored = max(raw, configuration.focusPollIntervalMilliseconds)
-            return max(10, min(500, floored))
+            // Cap persisted values at the shipped default so a default lowering reaches existing
+            // installs (anyone on the previous 80ms default gets the 50ms speedup on next launch).
+            // The stepper is hidden from the UI today, so any persisted value is a previous default
+            // rather than a user-chosen override.
+            let capped = min(raw, configuration.focusPollIntervalMilliseconds)
+            return max(10, min(500, capped))
         }()
 
         let resolvedMultiLineEnabled = userDefaults.object(forKey: Self.multiLineEnabledDefaultsKey) as? Bool ?? false
+        let resolvedEmojiPickerEnabled = userDefaults.object(forKey: Self.emojiPickerEnabledDefaultsKey) as? Bool ?? true
+        let resolvedPreferredEmojiSkinTone = userDefaults.string(forKey: Self.preferredEmojiSkinToneDefaultsKey)
+            .flatMap(EmojiSkinTone.init(rawValue:)) ?? .neutral
+        let resolvedPreferredEmojiGender = userDefaults.string(forKey: Self.preferredEmojiGenderDefaultsKey)
+            .flatMap(EmojiGender.init(rawValue:)) ?? .neutral
         let resolvedAutoAcceptTrailingPunctuation =
             userDefaults.object(forKey: Self.autoAcceptTrailingPunctuationDefaultsKey) as? Bool ?? true
         let resolvedTreeCandidateCount = max(1, min(4,
@@ -207,6 +295,25 @@ final class SuggestionSettingsModel: ObservableObject {
         let resolvedFullAcceptanceKeyLabel = userDefaults.string(forKey: Self.fullAcceptanceKeyLabelDefaultsKey)
             ?? Self.defaultFullAcceptanceKeyLabel
 
+        // Default is unbound. An absent UserDefaults entry must NOT fall back to a real key code —
+        // the hotkey is opt-in, and silently binding something would surprise existing users.
+        let resolvedGlobalToggleKeyCode = CGKeyCode(
+            userDefaults.object(forKey: Self.globalToggleKeyCodeDefaultsKey) as? Int
+                ?? Int(Self.disabledKeyCode)
+        )
+        let resolvedGlobalToggleKeyModifiers = ShortcutModifierMask(
+            rawValue: UInt32(userDefaults.object(forKey: Self.globalToggleKeyModifiersDefaultsKey) as? Int ?? 0)
+        )
+        let resolvedGlobalToggleKeyLabel = userDefaults.string(forKey: Self.globalToggleKeyLabelDefaultsKey)
+            ?? Self.disabledKeyLabel
+        // Default `.word` preserves the pre-feature behavior for existing installs that have no
+        // value persisted yet. Invalid persisted values fall back to `.word` rather than crashing
+        // so a hand-edited UserDefault can't strand the user.
+        let resolvedAcceptanceGranularity = userDefaults
+            .string(forKey: Self.acceptanceGranularityDefaultsKey)
+            .flatMap(AcceptanceGranularity.init(rawValue:))
+            ?? .word
+
         isGloballyEnabled = resolvedGloballyEnabled
         disabledAppRules = resolvedDisabledAppRules
         showIndicator = resolvedShowIndicator
@@ -217,13 +324,19 @@ final class SuggestionSettingsModel: ObservableObject {
         selectedWordCountPreset = resolvedWordCountPreset
         isClipboardContextEnabled = resolvedClipboardContextEnabled
         isFastModeEnabled = resolvedFastModeEnabled
+        isPerformanceTrackingEnabled = resolvedPerformanceTrackingEnabled
+        isMenuBarWordCountVisible = resolvedMenuBarWordCountVisible
         mirrorPreference = resolvedMirrorPreference
         userName = resolvedUserName
         customRules = resolvedCustomRules
+        extendedContext = resolvedExtendedContext
         responseLanguages = resolvedResponseLanguages
         debounceMilliseconds = resolvedDebounceMilliseconds
         focusPollIntervalMilliseconds = resolvedFocusPollIntervalMilliseconds
         isMultiLineEnabled = resolvedMultiLineEnabled
+        isEmojiPickerEnabled = resolvedEmojiPickerEnabled
+        preferredEmojiSkinTone = resolvedPreferredEmojiSkinTone
+        preferredEmojiGender = resolvedPreferredEmojiGender
         autoAcceptTrailingPunctuation = resolvedAutoAcceptTrailingPunctuation
         treeCandidateCount = resolvedTreeCandidateCount
         acceptanceKeyCode = resolvedAcceptanceKeyCode
@@ -232,6 +345,10 @@ final class SuggestionSettingsModel: ObservableObject {
         fullAcceptanceKeyCode = resolvedFullAcceptanceKeyCode
         fullAcceptanceKeyModifiers = resolvedFullAcceptanceKeyModifiers
         fullAcceptanceKeyLabel = resolvedFullAcceptanceKeyLabel
+        globalToggleKeyCode = resolvedGlobalToggleKeyCode
+        globalToggleKeyModifiers = resolvedGlobalToggleKeyModifiers
+        globalToggleKeyLabel = resolvedGlobalToggleKeyLabel
+        acceptanceGranularity = resolvedAcceptanceGranularity
 
         userDefaults.set(resolvedGloballyEnabled, forKey: Self.isGloballyEnabledDefaultsKey)
         persistDisabledAppRules(resolvedDisabledAppRules)
@@ -243,13 +360,19 @@ final class SuggestionSettingsModel: ObservableObject {
         persistSelectedWordCountPreset(resolvedWordCountPreset)
         persistClipboardContextEnabled(resolvedClipboardContextEnabled)
         persistFastModeEnabled(resolvedFastModeEnabled)
+        persistPerformanceTrackingEnabled(resolvedPerformanceTrackingEnabled)
+        persistMenuBarWordCountVisible(resolvedMenuBarWordCountVisible)
         persistMirrorPreference(resolvedMirrorPreference)
         persistUserName(resolvedUserName)
         persistCustomRules(resolvedCustomRules)
+        persistExtendedContext(resolvedExtendedContext)
         persistResponseLanguages(resolvedResponseLanguages)
         userDefaults.set(resolvedDebounceMilliseconds, forKey: Self.debounceMillisecondsDefaultsKey)
         userDefaults.set(resolvedFocusPollIntervalMilliseconds, forKey: Self.focusPollIntervalMillisecondsDefaultsKey)
         userDefaults.set(resolvedMultiLineEnabled, forKey: Self.multiLineEnabledDefaultsKey)
+        userDefaults.set(resolvedEmojiPickerEnabled, forKey: Self.emojiPickerEnabledDefaultsKey)
+        userDefaults.set(resolvedPreferredEmojiSkinTone.rawValue, forKey: Self.preferredEmojiSkinToneDefaultsKey)
+        userDefaults.set(resolvedPreferredEmojiGender.rawValue, forKey: Self.preferredEmojiGenderDefaultsKey)
         userDefaults.set(resolvedAutoAcceptTrailingPunctuation, forKey: Self.autoAcceptTrailingPunctuationDefaultsKey)
         userDefaults.set(Int(resolvedAcceptanceKeyCode), forKey: Self.acceptanceKeyCodeDefaultsKey)
         userDefaults.set(Int(resolvedAcceptanceKeyModifiers.rawValue), forKey: Self.acceptanceKeyModifiersDefaultsKey)
@@ -260,6 +383,13 @@ final class SuggestionSettingsModel: ObservableObject {
             forKey: Self.fullAcceptanceKeyModifiersDefaultsKey
         )
         userDefaults.set(resolvedFullAcceptanceKeyLabel, forKey: Self.fullAcceptanceKeyLabelDefaultsKey)
+        userDefaults.set(Int(resolvedGlobalToggleKeyCode), forKey: Self.globalToggleKeyCodeDefaultsKey)
+        userDefaults.set(
+            Int(resolvedGlobalToggleKeyModifiers.rawValue),
+            forKey: Self.globalToggleKeyModifiersDefaultsKey
+        )
+        userDefaults.set(resolvedGlobalToggleKeyLabel, forKey: Self.globalToggleKeyLabelDefaultsKey)
+        userDefaults.set(resolvedAcceptanceGranularity.rawValue, forKey: Self.acceptanceGranularityDefaultsKey)
 
         // The custom indicator icon feature was removed; scrub any previously-persisted PNG so
         // users who picked one in an older build get the default cat icon back automatically.
@@ -280,13 +410,15 @@ final class SuggestionSettingsModel: ObservableObject {
             isClipboardContextEnabled: isClipboardContextEnabled,
             userName: userName,
             customRules: customRules,
+            extendedContext: extendedContext,
             responseLanguages: responseLanguages,
             debounceMilliseconds: debounceMilliseconds,
             focusPollIntervalMilliseconds: focusPollIntervalMilliseconds,
             isMultiLineEnabled: isMultiLineEnabled,
             autoAcceptTrailingPunctuation: autoAcceptTrailingPunctuation,
             isFastModeEnabled: isFastModeEnabled,
-            mirrorPreference: mirrorPreference
+            mirrorPreference: mirrorPreference,
+            acceptanceGranularity: acceptanceGranularity
         )
     }
 
@@ -326,6 +458,24 @@ final class SuggestionSettingsModel: ObservableObject {
         persistFastModeEnabled(enabled)
     }
 
+    func setPerformanceTrackingEnabled(_ enabled: Bool) {
+        guard isPerformanceTrackingEnabled != enabled else {
+            return
+        }
+
+        isPerformanceTrackingEnabled = enabled
+        persistPerformanceTrackingEnabled(enabled)
+    }
+
+    func setMenuBarWordCountVisible(_ visible: Bool) {
+        guard isMenuBarWordCountVisible != visible else {
+            return
+        }
+
+        isMenuBarWordCountVisible = visible
+        persistMenuBarWordCountVisible(visible)
+    }
+
     func setMirrorPreference(_ preference: MirrorPreference) {
         guard mirrorPreference != preference else {
             return
@@ -343,6 +493,34 @@ final class SuggestionSettingsModel: ObservableObject {
         userDefaults.set(enabled, forKey: Self.multiLineEnabledDefaultsKey)
     }
 
+    func setEmojiPickerEnabled(_ enabled: Bool) {
+        guard isEmojiPickerEnabled != enabled else {
+            return
+        }
+        isEmojiPickerEnabled = enabled
+        userDefaults.set(enabled, forKey: Self.emojiPickerEnabledDefaultsKey)
+    }
+
+    func setPreferredEmojiSkinTone(_ tone: EmojiSkinTone) {
+        guard preferredEmojiSkinTone != tone else { return }
+        preferredEmojiSkinTone = tone
+        userDefaults.set(tone.rawValue, forKey: Self.preferredEmojiSkinToneDefaultsKey)
+    }
+
+    func setPreferredEmojiGender(_ gender: EmojiGender) {
+        guard preferredEmojiGender != gender else { return }
+        preferredEmojiGender = gender
+        userDefaults.set(gender.rawValue, forKey: Self.preferredEmojiGenderDefaultsKey)
+    }
+
+    /// Live snapshot the emoji picker's variant resolver reads at match time.
+    var emojiVariantPreferences: EmojiVariantPreferences {
+        EmojiVariantPreferences(
+            skinTone: preferredEmojiSkinTone,
+            gender: preferredEmojiGender
+        )
+    }
+
     func setAutoAcceptTrailingPunctuation(_ enabled: Bool) {
         guard autoAcceptTrailingPunctuation != enabled else {
             return
@@ -356,6 +534,14 @@ final class SuggestionSettingsModel: ObservableObject {
         guard treeCandidateCount != clamped else { return }
         treeCandidateCount = clamped
         userDefaults.set(clamped, forKey: Self.treeCandidateCountDefaultsKey)
+    }
+
+    func setAcceptanceGranularity(_ granularity: AcceptanceGranularity) {
+        guard acceptanceGranularity != granularity else {
+            return
+        }
+        acceptanceGranularity = granularity
+        userDefaults.set(granularity.rawValue, forKey: Self.acceptanceGranularityDefaultsKey)
     }
 
     func setDebounceMilliseconds(_ value: Int) {
@@ -501,6 +687,12 @@ final class SuggestionSettingsModel: ObservableObject {
         return nil
     }
 
+    /// The emoji picker commits with the word-accept shortcut specifically. This is separate from
+    /// `acceptanceHintLabel` because hiding ghost-text hints should not hide the picker instruction.
+    var emojiPickerAcceptKeyLabel: String? {
+        acceptanceKeyCode == Self.disabledKeyCode ? nil : acceptanceKeyLabel
+    }
+
     func setCustomSuggestionTextColorHex(_ hex: String?) {
         let normalizedHex = Self.normalizedHexString(hex)
         guard customSuggestionTextColorHex != normalizedHex else {
@@ -554,6 +746,20 @@ final class SuggestionSettingsModel: ObservableObject {
     /// ever made non-empty, revisit this name and the editor's button label together.
     func clearRules() {
         setRules(CustomRulesCatalog.defaultRules)
+    }
+
+    /// All extended-context mutations funnel through here so storage stays bounded — leading and
+    /// trailing whitespace is trimmed and the body is hard-capped at
+    /// `maximumExtendedContextCharacters` so a runaway paste cannot blow out the model's context
+    /// window on every subsequent request.
+    func setExtendedContext(_ context: String) {
+        let normalized = Self.normalizedExtendedContext(context)
+        guard extendedContext != normalized else {
+            return
+        }
+
+        extendedContext = normalized
+        persistExtendedContext(normalized)
     }
 
     /// All language mutations funnel through here so storage stays normalized (trimmed, deduped,
@@ -639,6 +845,77 @@ final class SuggestionSettingsModel: ObservableObject {
         setFullAcceptanceKey(keyCode: Self.disabledKeyCode, modifiers: [], label: Self.disabledKeyLabel)
     }
 
+    /// Persists a new global-toggle hotkey. Modifiers are normalized to empty when the key code is
+    /// `disabledKeyCode` so the listener tap can rely on `(disabled, [])` meaning "do not install
+    /// the tap at all" without inspecting the modifier set separately.
+    func setGlobalToggleKey(keyCode: CGKeyCode, modifiers: ShortcutModifierMask, label: String) {
+        let normalizedModifiers = keyCode == Self.disabledKeyCode ? [] : modifiers
+        guard globalToggleKeyCode != keyCode
+            || globalToggleKeyModifiers != normalizedModifiers
+            || globalToggleKeyLabel != label
+        else {
+            return
+        }
+
+        globalToggleKeyCode = keyCode
+        globalToggleKeyModifiers = normalizedModifiers
+        globalToggleKeyLabel = label
+        userDefaults.set(Int(keyCode), forKey: Self.globalToggleKeyCodeDefaultsKey)
+        userDefaults.set(Int(normalizedModifiers.rawValue), forKey: Self.globalToggleKeyModifiersDefaultsKey)
+        userDefaults.set(label, forKey: Self.globalToggleKeyLabelDefaultsKey)
+    }
+
+    func clearGlobalToggleKey() {
+        setGlobalToggleKey(keyCode: Self.disabledKeyCode, modifiers: [], label: Self.disabledKeyLabel)
+    }
+
+    // All stored state is thread-safe to release (Combine subjects, UserDefaults). The
+    // nonisolated deinit prevents Swift from scheduling the teardown through the
+    // back-deployment main-actor executor shim, which has a StopLookupScope bug on macOS 26.
+    nonisolated deinit {}
+
+    /// Convenience used by the hotkey callback. Wrapping the flip here keeps the InputMonitor
+    /// closure trivial and gives the menu bar / tests a single entry point.
+    func toggleGloballyEnabled() {
+        setGloballyEnabled(!isGloballyEnabled)
+    }
+
+    /// Returns the user-facing name of the shortcut action already bound to `(keyCode, modifiers)`,
+    /// excluding `action` itself, or `nil` when the combo is free.
+    ///
+    /// This is the single source of truth the recorder consults before committing a new binding.
+    /// Without it the global-toggle hotkey can silently collide with an accept key: the toggle tap
+    /// is head-inserted but the accept tap (installed later while a suggestion is visible) sits ahead
+    /// of it and consumes the shared key first, so the toggle never fires. Blocking the duplicate up
+    /// front keeps every binding unambiguous. The disabled sentinel never conflicts — several actions
+    /// may be left unbound at once.
+    func conflictingShortcutName(
+        keyCode: CGKeyCode,
+        modifiers: ShortcutModifierMask,
+        excluding action: ShortcutAction
+    ) -> String? {
+        guard keyCode != Self.disabledKeyCode else { return nil }
+
+        for other in ShortcutAction.allCases where other != action {
+            let binding = shortcutBinding(for: other)
+            if binding.keyCode == keyCode, binding.modifiers == modifiers {
+                return other.displayName
+            }
+        }
+        return nil
+    }
+
+    private func shortcutBinding(for action: ShortcutAction) -> (keyCode: CGKeyCode, modifiers: ShortcutModifierMask) {
+        switch action {
+        case .acceptWord:
+            return (acceptanceKeyCode, acceptanceKeyModifiers)
+        case .acceptEntireSuggestion:
+            return (fullAcceptanceKeyCode, fullAcceptanceKeyModifiers)
+        case .toggleTabby:
+            return (globalToggleKeyCode, globalToggleKeyModifiers)
+        }
+    }
+
     private func persistSelectedEngine(_ engine: SuggestionEngineKind) {
         userDefaults.set(engine.rawValue, forKey: Self.selectedEngineDefaultsKey)
     }
@@ -653,6 +930,14 @@ final class SuggestionSettingsModel: ObservableObject {
 
     private func persistFastModeEnabled(_ enabled: Bool) {
         userDefaults.set(enabled, forKey: Self.fastModeEnabledDefaultsKey)
+    }
+
+    private func persistPerformanceTrackingEnabled(_ enabled: Bool) {
+        userDefaults.set(enabled, forKey: Self.performanceTrackingEnabledDefaultsKey)
+    }
+
+    private func persistMenuBarWordCountVisible(_ visible: Bool) {
+        userDefaults.set(visible, forKey: Self.menuBarWordCountVisibleDefaultsKey)
     }
 
     private func persistMirrorPreference(_ preference: MirrorPreference) {
@@ -770,6 +1055,30 @@ final class SuggestionSettingsModel: ObservableObject {
         userDefaults.set(rules, forKey: Self.customRulesDefaultsKey)
     }
 
+    private func persistExtendedContext(_ context: String) {
+        if context.isEmpty {
+            userDefaults.removeObject(forKey: Self.extendedContextDefaultsKey)
+        } else {
+            userDefaults.set(context, forKey: Self.extendedContextDefaultsKey)
+        }
+    }
+
+    /// Length-cap the persisted body at `maximumExtendedContextCharacters` so an accidental paste
+    /// of a huge document can't blow out the model's context window on every subsequent request.
+    ///
+    /// Whitespace is intentionally NOT trimmed here. The TextEditor binding writes back through
+    /// `setExtendedContext` on every keystroke, so any trim — including a trailing-space trim —
+    /// would strip whitespace the user is mid-way through typing, making it impossible to type a
+    /// space at the end of a word. Whitespace-only content is collapsed back to "no value" in
+    /// `SuggestionRequestFactory` instead, where the cost is paid once per request rather than once
+    /// per keystroke.
+    private static func normalizedExtendedContext(_ context: String) -> String {
+        guard context.count > maximumExtendedContextCharacters else {
+            return context
+        }
+        return String(context.prefix(maximumExtendedContextCharacters))
+    }
+
     private func persistResponseLanguages(_ languages: [String]) {
         userDefaults.set(languages, forKey: Self.responseLanguagesDefaultsKey)
     }
@@ -792,7 +1101,10 @@ extension SuggestionSettingsModel: SuggestionSettingsProviding {
         // upstreams. Group related settings into nested combiners so the shape stays readable.
         // `presentationToggles` carries the visual-pipeline knobs (clipboard, fast mode, mirror
         // preference); they share the property of "affects how/when suggestions are shown".
-        Publishers.CombineLatest4(
+        //
+        // The outer CombineLatest4 is at the cap, so `$acceptanceGranularity` is layered above it
+        // via a second CombineLatest to avoid restructuring the existing groupings.
+        let primary = Publishers.CombineLatest4(
             Publishers.CombineLatest4(
                 $isGloballyEnabled,
                 $disabledAppRules,
@@ -808,29 +1120,36 @@ extension SuggestionSettingsModel: SuggestionSettingsProviding {
                 $autoAcceptTrailingPunctuation
             )
         )
-        .map { combinedSettings, presentationToggles, profile, timing in
-            let (globallyEnabled, disabledAppRules, engine, wordCountPreset) = combinedSettings
-            let (clipboardContextEnabled, fastModeEnabled, mirrorPreference) = presentationToggles
-            let (userName, customRules, responseLanguages) = profile
-            let (debounce, focusPoll, multiLine, autoAcceptPunctuation) = timing
-            return SuggestionSettingsSnapshot(
-                isGloballyEnabled: globallyEnabled,
-                disabledAppBundleIdentifiers: Set(disabledAppRules.map(\.bundleIdentifier)),
-                selectedEngine: engine,
-                selectedWordCountPreset: wordCountPreset,
-                isClipboardContextEnabled: clipboardContextEnabled,
-                userName: userName,
-                customRules: customRules,
-                responseLanguages: responseLanguages,
-                debounceMilliseconds: debounce,
-                focusPollIntervalMilliseconds: focusPoll,
-                isMultiLineEnabled: multiLine,
-                autoAcceptTrailingPunctuation: autoAcceptPunctuation,
-                isFastModeEnabled: fastModeEnabled,
-                mirrorPreference: mirrorPreference
-            )
-        }
-        .removeDuplicates()
-        .eraseToAnyPublisher()
+        // The outer CombineLatest stack is already at Combine's per-operator cap, so each new
+        // top-level setting gets layered above via another `CombineLatest`. `extendedContext` joins
+        // alongside `acceptanceGranularity` here for the same reason.
+        return Publishers.CombineLatest3(primary, $acceptanceGranularity, $extendedContext)
+            .map { primaryTuple, granularity, extendedContext in
+                let (combinedSettings, presentationToggles, profile, timing) = primaryTuple
+                let (globallyEnabled, disabledAppRules, engine, wordCountPreset) = combinedSettings
+                let (clipboardContextEnabled, fastModeEnabled, mirrorPreference) = presentationToggles
+                let (userName, customRules, responseLanguages) = profile
+                let (debounce, focusPoll, multiLine, autoAcceptPunctuation) = timing
+                return SuggestionSettingsSnapshot(
+                    isGloballyEnabled: globallyEnabled,
+                    disabledAppBundleIdentifiers: Set(disabledAppRules.map(\.bundleIdentifier)),
+                    selectedEngine: engine,
+                    selectedWordCountPreset: wordCountPreset,
+                    isClipboardContextEnabled: clipboardContextEnabled,
+                    userName: userName,
+                    customRules: customRules,
+                    extendedContext: extendedContext,
+                    responseLanguages: responseLanguages,
+                    debounceMilliseconds: debounce,
+                    focusPollIntervalMilliseconds: focusPoll,
+                    isMultiLineEnabled: multiLine,
+                    autoAcceptTrailingPunctuation: autoAcceptPunctuation,
+                    isFastModeEnabled: fastModeEnabled,
+                    mirrorPreference: mirrorPreference,
+                    acceptanceGranularity: granularity
+                )
+            }
+            .removeDuplicates()
+            .eraseToAnyPublisher()
     }
 }

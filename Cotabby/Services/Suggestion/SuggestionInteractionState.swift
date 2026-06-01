@@ -106,9 +106,14 @@ final class SuggestionInteractionState {
     /// Validates whether the current stored session can be accepted from the latest live AX state.
     /// The returned value gives the coordinator the exact chunk to insert and the context it should
     /// use for diagnostics and overlay updates.
+    ///
+    /// `granularity` selects between word-by-word and phrase-by-phrase acceptance. Whole-
+    /// suggestion acceptance is the dedicated full-accept key's responsibility and is routed
+    /// through `prepareFullAcceptance`, so the granularity enum has no case for it here.
     func prepareAcceptance(
         from snapshot: FocusedInputSnapshot,
         overlayState: OverlayState,
+        granularity: AcceptanceGranularity,
         autoAcceptTrailingPunctuation: Bool = true
     ) -> SuggestionAcceptancePreparation {
         let validated = validateSessionForAcceptance(from: snapshot, overlayState: overlayState)
@@ -116,10 +121,20 @@ final class SuggestionInteractionState {
             return .invalid(validated.failureReason ?? "Key passed through.")
         }
 
-        let chunk = SuggestionSessionReconciler.nextAcceptanceChunk(
-            from: session.remainingText,
-            autoAcceptTrailingPunctuation: autoAcceptTrailingPunctuation
-        )
+        let chunk: String
+        switch granularity {
+        case .word:
+            chunk = SuggestionSessionReconciler.nextAcceptanceChunk(
+                from: session.remainingText,
+                autoAcceptTrailingPunctuation: autoAcceptTrailingPunctuation
+            )
+        case .phrase:
+            chunk = SuggestionSessionReconciler.nextAcceptancePhrase(
+                from: session.remainingText,
+                autoAcceptTrailingPunctuation: autoAcceptTrailingPunctuation
+            )
+        }
+
         guard !chunk.isEmpty else {
             return .invalid("Key passed through because no remaining suggestion chunk was available.")
         }

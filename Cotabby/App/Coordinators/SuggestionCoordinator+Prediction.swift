@@ -98,6 +98,7 @@ extension SuggestionCoordinator {
         latestPromptPreview = requestBuildResult.promptPreview
         latestRawModelOutput = nil
         let request = requestBuildResult.request
+        latestRequestID = request.requestID
 
         state = .generating
         logStage(
@@ -163,6 +164,11 @@ extension SuggestionCoordinator {
 
         let liveContext = interactionState.materializeContext(from: rawContext)
 
+        // Consume the tail recorded by a final-chunk accept. It gets exactly one shot to be
+        // recognized as a stale echo on the regeneration scheduled right after acceptance.
+        let pendingAcceptedTail = lastAcceptedTail
+        lastAcceptedTail = nil
+
         // Generation numbers are our stale-result guard. If the text changed while the model was
         // thinking, we drop the answer instead of showing a suggestion for old content.
         guard liveContext.generation == result.generation else {
@@ -206,6 +212,30 @@ extension SuggestionCoordinator {
                 workID: workID,
                 generation: result.generation,
                 message: "Ignored the suggestion because the current field has selected text.",
+                rawOutput: result.rawText,
+                normalizedOutput: result.text
+            )
+            return
+        }
+
+        // A regeneration that only re-proposes the just-accepted tail while the field still shows the
+        // pre-acceptance text means our insert has not published yet. Drop it so the next accept can't
+        // re-insert the same word and spin the final-word loop.
+        if let pendingAcceptedTail,
+           SuggestionSessionReconciler.isStaleAcceptanceEcho(
+               resultText: result.text,
+               acceptedChunk: pendingAcceptedTail.text,
+               currentPrecedingText: liveContext.precedingText,
+               acceptedPrecedingText: pendingAcceptedTail.precedingText
+           ) {
+            clearSuggestion(clearDiagnostics: false)
+            hideOverlay(reason: "Overlay hidden because the regeneration only echoed the just-accepted text before the host published it.")
+            state = .idle
+            logStage(
+                "stale-accept-echo",
+                workID: workID,
+                generation: result.generation,
+                message: "Dropped a regeneration that re-proposed the just-accepted tail before the host published the insert.",
                 rawOutput: result.rawText,
                 normalizedOutput: result.text
             )
@@ -388,6 +418,9 @@ extension SuggestionCoordinator {
 
     /// Clears the active suggestion and optionally preserves or drops diagnostic breadcrumbs.
     func clearSuggestion(clearDiagnostics: Bool = false) {
+        // Drop any pending accepted-tail guard whenever the suggestion state is torn down (user
+        // typed, focus changed, predictions disabled). The final-chunk accept re-sets it afterward.
+        lastAcceptedTail = nil
         latestSuggestionPreview = nil
         latestFullSuggestionPreview = nil
         latestRemainingSuggestionPreview = nil
@@ -401,14 +434,17 @@ extension SuggestionCoordinator {
             latestPromptPreview = nil
             latestRawModelOutput = nil
             latestGenerationNumber = nil
+            // Clear so the next session's terminal logStage doesn't carry the previous
+            // request_id forward. `+Acceptance.logStage` falls back to "req_none" on nil,
+            // preserving the join-key contract documented on `latestRequestID`.
+            latestRequestID = nil
         }
     }
 
     /// Cancels debounce/generation tasks and advances the work id so late completions are ignored.
     func cancelPredictionWork() {
+        hostPublishPollGeneration &+= 1
         workController.cancelAll()
-        hostPublishPollTask?.cancel()
-        hostPublishPollTask = nil
         postInsertionRefreshTask?.cancel()
         postInsertionRefreshTask = nil
     }

@@ -144,8 +144,8 @@ the core should own native correctness.
 - `ActivationIndicatorController` owns the optional caret/field-edge indicator.
 - `FocusDebugOverlayController` is for developer visibility and should stay gated behind debug
   options, not normal user settings.
-- `SettingsView` and onboarding views should remain presentation-focused. Push behavior into
-  services, models, or support helpers.
+- Settings panes (under `Cotabby/UI/Settings/Panes/`) and onboarding views should remain
+  presentation-focused. Push behavior into services, models, or support helpers.
 
 ## Swift And Concurrency Rules
 
@@ -186,15 +186,85 @@ Prefer this order when changing behavior:
 This order reduces regression risk because deterministic code changes before stateful orchestration.
 It also creates better tests.
 
+## Debugging & Logs
+
+Cotabby has a structured logging system built for AI-assisted debugging. During development the app
+is launched with `-cotabby-debug`, which enables on-disk JSONL sinks in addition to the always-on
+Console.app stream.
+
+**Log file locations** (only populated when `-cotabby-debug` is set):
+
+- `~/Library/Logs/Cotabby/cotabby.jsonl` — main event stream. One JSON object per line, with all
+  metadata flattened as top-level fields so it can be filtered with `jq`.
+- `~/Library/Logs/Cotabby/llm-io.jsonl` — full LLM prompts and completions, one record per
+  generation. Shares `request_id` with the main log so a single suggestion can be joined across
+  files.
+- `~/Desktop/cotabby-ax-dump.txt` — most recent Chrome AX tree snapshot. Overwritten on each
+  Chrome focus change (debounced by focused-element identity).
+- Rotated previous logs: `*.jsonl.1` (one-step rotation when a file exceeds 10 MB).
+
+**Correlation IDs.** Every prediction gets a `request_id` like `req_a3f9k2lq`, stamped on every log
+line touching that request (coordinator state transitions, router selection, engine generation, LLM
+I/O capture). Pull a complete history of one suggestion:
+
+```bash
+jq 'select(.request_id == "req_a3f9k2lq")' ~/Library/Logs/Cotabby/cotabby.jsonl
+jq 'select(.request_id == "req_a3f9k2lq")' ~/Library/Logs/Cotabby/llm-io.jsonl
+```
+
+**Useful `jq` recipes:**
+
+```bash
+# Recent errors across the app
+jq 'select(.level == "error")' ~/Library/Logs/Cotabby/cotabby.jsonl
+
+# Llama generations slower than 500 ms
+jq 'select(.engine == "llama" and .latency_ms > 500)' ~/Library/Logs/Cotabby/llm-io.jsonl
+
+# Coordinator state transitions
+jq 'select(.category == "suggestion" and .stage != null)' ~/Library/Logs/Cotabby/cotabby.jsonl
+
+# Runtime model load/decode events
+jq 'select(.category == "runtime")' ~/Library/Logs/Cotabby/cotabby.jsonl
+```
+
+**Symptom → category map:**
+
+- Ghost text didn't appear → `suggestion` + `focus`
+- Wrong text inserted → look up the request in `llm-io.jsonl`, then walk `suggestion` for
+  acceptance
+- Model won't load / decode fails → `runtime` + `models`
+- Permission dialog loop → `app` (permission state transitions)
+- Chrome-specific weirdness → start with `~/Desktop/cotabby-ax-dump.txt`, then `focus`
+- Wrong backend chosen → `suggestion` router selection log (`engine`, `fallback_engine`)
+
+**Console.app fallback** (when `-cotabby-debug` wasn't set):
+
+```bash
+log show --predicate 'subsystem == "com.cotabby.app"' --last 10m
+log stream --predicate 'subsystem == "com.cotabby.app"' --level debug
+```
+
+**Rule of thumb.** When a user reports a bug, first `tail` / `jq` the relevant file with the
+symptom → category map. Do not ask the user to re-explain symptoms before checking the logs.
+
 ## Validation
 
 Use the narrowest meaningful validation first, then broaden if the change touches shared behavior.
 Common commands:
 
 ```bash
-xcodebuild -project Cotabby.xcodeproj -scheme Cotabby -destination 'platform=macOS' build
-xcodebuild -project Cotabby.xcodeproj -scheme Cotabby -destination 'platform=macOS' build-for-testing
+xcodebuild -project Cotabby.xcodeproj -scheme Cotabby -destination 'platform=macOS' build \
+  -derivedDataPath build/DerivedData
+xcodebuild -project Cotabby.xcodeproj -scheme Cotabby -destination 'platform=macOS' build-for-testing \
+  -derivedDataPath build/DerivedData
 ```
+
+Always pass `-derivedDataPath build/DerivedData` so the output lands in the repo-scoped `build/`
+directory (already gitignored) instead of accumulating under
+`~/Library/Developer/Xcode/DerivedData/Cotabby-*`, where every build leaves a fresh multi-GB module
+cache and SwiftPM checkout that nothing trims. When a task is done and the artifacts are no longer
+needed, `rm -rf build/DerivedData` before reporting completion.
 
 Run targeted tests for changed pure logic when available. If `xcodebuild test` fails locally because
 of app-hosted test bundle signing or Team ID mismatch, report the exact failure and still provide the

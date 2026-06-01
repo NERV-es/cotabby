@@ -23,8 +23,15 @@ final class CotabbyAppEnvironment {
     let foundationModelAvailabilityService: FoundationModelAvailabilityService
     let clipboardContextProvider: ClipboardContextProvider
     let suggestionCoordinator: SuggestionCoordinator
+    /// Shared with the Advanced settings pane so the user can fire an ad-hoc generation against
+    /// the currently-selected engine and verify that Extended Context (and other prompt inputs)
+    /// are actually shaping the output. Reusing the live router means the playground produces the
+    /// same answer the autocomplete pipeline would, not a stand-in.
+    let suggestionEngine: any SuggestionGenerating
+    let emojiPickerController: EmojiPickerController
     let welcomeCoordinator: WelcomeCoordinator
     let huggingFaceSearchService: HuggingFaceSearchService
+    let performanceMetricsStore: PerformanceMetricsStore
     let settingsCoordinator: SettingsCoordinator
     let activationIndicatorController: ActivationIndicatorController
     let focusDebugOverlayController: FocusDebugOverlayController?
@@ -52,6 +59,11 @@ final class CotabbyAppEnvironment {
         inputMonitor.acceptanceKeyModifiersProvider = { suggestionSettings.acceptanceKeyModifiers }
         inputMonitor.fullAcceptanceKeyCodeProvider = { suggestionSettings.fullAcceptanceKeyCode }
         inputMonitor.fullAcceptanceKeyModifiersProvider = { suggestionSettings.fullAcceptanceKeyModifiers }
+        inputMonitor.globalToggleKeyCodeProvider = { suggestionSettings.globalToggleKeyCode }
+        inputMonitor.globalToggleKeyModifiersProvider = { suggestionSettings.globalToggleKeyModifiers }
+        inputMonitor.onGlobalToggleHotkey = { [weak suggestionSettings] in
+            suggestionSettings?.toggleGloballyEnabled()
+        }
         let focusModel = FocusTrackingModel(
             permissionProvider: { permissionManager.accessibilityGranted },
             ignoredBundleIdentifier: Bundle.main.bundleIdentifier,
@@ -81,19 +93,10 @@ final class CotabbyAppEnvironment {
             foundationModelAvailabilityService: foundationModelAvailabilityService
         )
         let huggingFaceSearchService = HuggingFaceSearchService()
-        let settingsCoordinator = SettingsCoordinator(
-            appUpdateManager: appUpdateManager,
-            launchAtLoginService: launchAtLoginService,
-            permissionManager: permissionManager,
-            suggestionSettings: suggestionSettings,
-            foundationModelAvailabilityService: foundationModelAvailabilityService,
-            runtimeModel: runtimeModel,
-            modelDownloadManager: modelDownloadManager,
-            huggingFaceSearchService: huggingFaceSearchService,
-            onShowWelcome: { [weak welcomeCoordinator] in
-                welcomeCoordinator?.showWelcome()
-            }
-        )
+        let performanceMetricsStore = PerformanceMetricsStore()
+        // Settings coordinator construction is deferred below until after `suggestionEngine` is
+        // built — the Advanced pane's "try it" playground needs the engine so it can fire ad-hoc
+        // generations using the same router the autocomplete pipeline does.
         let suggestionInserter = SuggestionInserter(suppressionController: suppressionController)
         let overlayController = OverlayController(suggestionSettings: suggestionSettings)
         let activationIndicatorController = ActivationIndicatorController()
@@ -128,7 +131,28 @@ final class CotabbyAppEnvironment {
         let suggestionEngine: any SuggestionGenerating = SuggestionEngineRouter(
             suggestionSettings: suggestionSettings,
             foundationModelEngine: foundationModelEngine,
-            llamaEngine: LlamaSuggestionEngine(runtimeManager: runtimeManager, suggestionSettings: suggestionSettings)
+            llamaEngine: LlamaSuggestionEngine(runtimeManager: runtimeManager, suggestionSettings: suggestionSettings),
+            performanceMetricsStore: performanceMetricsStore,
+            llamaModelNameProvider: { [weak runtimeManager] in
+                runtimeManager?.currentModelFilename
+            }
+        )
+
+        let settingsCoordinator = SettingsCoordinator(
+            appUpdateManager: appUpdateManager,
+            launchAtLoginService: launchAtLoginService,
+            permissionManager: permissionManager,
+            suggestionSettings: suggestionSettings,
+            foundationModelAvailabilityService: foundationModelAvailabilityService,
+            runtimeModel: runtimeModel,
+            modelDownloadManager: modelDownloadManager,
+            huggingFaceSearchService: huggingFaceSearchService,
+            suggestionEngine: suggestionEngine,
+            configuration: configuration,
+            performanceMetricsStore: performanceMetricsStore,
+            onShowWelcome: { [weak welcomeCoordinator] in
+                welcomeCoordinator?.showWelcome()
+            }
         )
 
         let interactionState = SuggestionInteractionState()
@@ -149,6 +173,24 @@ final class CotabbyAppEnvironment {
             configuration: configuration
         )
 
+        // The emoji picker is a sibling to the suggestion coordinator. It reuses the input monitor,
+        // focus model, and inserter, but owns its own trigger state machine and floating panel.
+        let emojiPickerController = EmojiPickerController(
+            matcher: EmojiMatcher(catalog: EmojiCatalog.bundled()),
+            panel: EmojiPickerPanelController(),
+            focusModel: focusModel,
+            inputMonitor: inputMonitor,
+            inserter: suggestionInserter,
+            isEnabled: { suggestionSettings.isEmojiPickerEnabled },
+            emojiPreferences: { suggestionSettings.emojiVariantPreferences },
+            acceptKeyLabel: { suggestionSettings.emojiPickerAcceptKeyLabel }
+        )
+        // Give the picker first look at every keystroke the coordinator receives, so it can detect the
+        // `:` trigger and drive its state machine without changing who owns `inputMonitor.onEvent`.
+        suggestionCoordinator.emojiInputObserver = { [weak emojiPickerController] event in
+            emojiPickerController?.observe(event) ?? false
+        }
+
         self.permissionManager = permissionManager
         self.runtimeModel = runtimeModel
         self.modelDownloadManager = modelDownloadManager
@@ -161,8 +203,11 @@ final class CotabbyAppEnvironment {
         self.foundationModelAvailabilityService = foundationModelAvailabilityService
         self.clipboardContextProvider = clipboardContextProvider
         self.suggestionCoordinator = suggestionCoordinator
+        self.suggestionEngine = suggestionEngine
+        self.emojiPickerController = emojiPickerController
         self.welcomeCoordinator = welcomeCoordinator
         self.huggingFaceSearchService = huggingFaceSearchService
+        self.performanceMetricsStore = performanceMetricsStore
         self.settingsCoordinator = settingsCoordinator
         self.activationIndicatorController = activationIndicatorController
         self.focusDebugOverlayController = FocusDebugOverlayController.isEnabled
@@ -179,5 +224,15 @@ final class CotabbyAppEnvironment {
 
         // Key code changes reach InputMonitor through closures that read from the model
         // at event time (set above), so no Combine subscription is needed here.
+
+        // The global-toggle hotkey is the exception: its tap is install-on-demand so a user who
+        // never binds it pays zero per-keystroke cost. Install/uninstall whenever the binding
+        // crosses the unbound/bound boundary or when the key code itself changes.
+        suggestionSettings.$globalToggleKeyCode
+            .removeDuplicates()
+            .sink { [weak inputMonitor] _ in
+                inputMonitor?.refreshToggleTap()
+            }
+            .store(in: &cancellables)
     }
 }

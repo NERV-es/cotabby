@@ -96,6 +96,7 @@ enum CotabbyTestFixtures {
         completionLengthInstruction: String = "Return only the next few words.",
         userName: String? = nil,
         customRules: [String] = [],
+        extendedContext: String? = nil,
         languageInstruction: String? = nil,
         clipboardContext: String? = nil,
         visualContextSummary: String? = nil,
@@ -124,6 +125,7 @@ enum CotabbyTestFixtures {
             completionLengthInstruction: completionLengthInstruction,
             userName: userName,
             customRules: customRules,
+            extendedContext: extendedContext,
             languageInstruction: languageInstruction,
             clipboardContext: clipboardContext,
             visualContextSummary: visualContextSummary,
@@ -215,13 +217,15 @@ enum CotabbyTestFixtures {
         isClipboardContextEnabled: Bool = true,
         userName: String = "",
         customRules: [String] = [],
+        extendedContext: String = "",
         responseLanguages: [String] = [],
         debounceMilliseconds: Int = 50,
         focusPollIntervalMilliseconds: Int = 50,
         isMultiLineEnabled: Bool = false,
         autoAcceptTrailingPunctuation: Bool = true,
         isFastModeEnabled: Bool = false,
-        mirrorPreference: MirrorPreference = .auto
+        mirrorPreference: MirrorPreference = .auto,
+        acceptanceGranularity: AcceptanceGranularity = .word
     ) -> SuggestionSettingsSnapshot {
         SuggestionSettingsSnapshot(
             isGloballyEnabled: isGloballyEnabled,
@@ -231,13 +235,15 @@ enum CotabbyTestFixtures {
             isClipboardContextEnabled: isClipboardContextEnabled,
             userName: userName,
             customRules: customRules,
+            extendedContext: extendedContext,
             responseLanguages: responseLanguages,
             debounceMilliseconds: debounceMilliseconds,
             focusPollIntervalMilliseconds: focusPollIntervalMilliseconds,
             isMultiLineEnabled: isMultiLineEnabled,
             autoAcceptTrailingPunctuation: autoAcceptTrailingPunctuation,
             isFastModeEnabled: isFastModeEnabled,
-            mirrorPreference: mirrorPreference
+            mirrorPreference: mirrorPreference,
+            acceptanceGranularity: acceptanceGranularity
         )
     }
 }

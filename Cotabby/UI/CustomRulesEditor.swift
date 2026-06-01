@@ -3,11 +3,16 @@ import SwiftUI
 /// File overview:
 /// Editor for the user's custom autocomplete rules. Rules are short imperative style directives
 /// (e.g. "Use British spelling") shown as removable chips, added freeform or by tapping a suggested
-/// chip. "Clear" removes every rule (rules are opt-in, so the baseline is empty).
+/// chip. A bottom "Reset" button removes every rule (rules are opt-in, so the baseline is empty).
 ///
 /// The chip and flow-layout primitives live in `TagChip.swift`, shared with `LanguageTagsEditor`.
 struct CustomRulesEditor: View {
     @ObservedObject var suggestionSettings: SuggestionSettingsModel
+
+    /// When false, the editor drops its own "Rules" title so an enclosing `Section("Rules")` can
+    /// supply the heading without duplicating it. The Reset control stays in place either way.
+    /// Defaults to true so standalone uses (e.g. onboarding) keep their inline title.
+    var showsTitleHeader: Bool = true
 
     @State private var inputText: String = ""
 
@@ -27,18 +32,9 @@ struct CustomRulesEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
+            if showsTitleHeader {
                 Text("Rules")
                     .font(.system(size: 13, weight: .medium))
-                Spacer()
-                if canClear {
-                    Button("Clear") {
-                        suggestionSettings.clearRules()
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                }
             }
 
             if !rules.isEmpty {
@@ -76,6 +72,18 @@ struct CustomRulesEditor: View {
                             suggestionSettings.addRule(suggestion)
                         }
                     }
+                }
+            }
+
+            if canClear {
+                HStack {
+                    Spacer()
+                    Button {
+                        suggestionSettings.clearRules()
+                    } label: {
+                        Label("Reset", systemImage: "arrow.counterclockwise")
+                    }
+                    .controlSize(.small)
                 }
             }
         }

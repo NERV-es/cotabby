@@ -35,22 +35,33 @@ protocol SuggestionInputMonitoring: AnyObject {
     var onEvent: ((CapturedInputEvent) -> Bool)? { get set }
     var onSuppressedSyntheticInput: (() -> Void)? { get set }
 
-    /// Fail-open authorization for the active accept tap. The tap only consumes a matching
-    /// keystroke when this closure returns `true` at event time. The coordinator wires it to a
-    /// live check (ready state + active session + visible overlay) so any lifecycle gap collapses
-    /// to "pass through" instead of swallowing the user's keystroke.
-    var shouldConsumeAcceptKeyProvider: @MainActor () -> Bool { get set }
+    /// Fail-open preflight for the active accept tap. The tap only routes a matching key into the
+    /// coordinator when this closure returns `true` at event time. The coordinator still performs
+    /// full session validation before the tap consumes the original key.
+    var shouldConsumeAcceptKeyProvider: @MainActor @Sendable () -> Bool { get set }
 
     /// Drives the lifecycle of the active accept-key tap. The coordinator turns this on while
     /// a suggestion overlay is visible and off otherwise, so Cotabby only sits in the synchronous
     /// keystroke path during the brief windows it actually needs to consume the accept key.
     func setAcceptInterceptionActive(_ active: Bool)
+}
 
-    /// Re-posts an accept key that the active tap already swallowed, used when the coordinator
-    /// decides at the last moment not to insert a suggestion (stale AX, invalidated session).
-    /// Without this, browsers like Gmail experience the keystroke as silently dropped — see the
-    /// "missed Tab" symptom investigated alongside #337.
-    func replayConsumedAcceptKey(keyCode: CGKeyCode, flags: CGEventFlags)
+/// The emoji picker's slice of the input monitor. Kept separate from `SuggestionInputMonitoring` so
+/// the suggestion coordinator stays unaware of emoji concerns and vice versa, even though one
+/// `InputMonitor` satisfies both.
+@MainActor
+protocol EmojiInputIntercepting: AnyObject {
+    /// Per-key consume decision consulted by the active tap while an emoji capture is open. The
+    /// controller computes the decision during the observer pass and this closure returns it.
+    var emojiCaptureKeyDecider: (@MainActor (InputMonitorKeyEvent) -> InputMonitorAcceptTapDecision)? { get set }
+
+    /// Keeps the active tap installed for the emoji-capture reason (parallel to the suggestion
+    /// overlay's `setAcceptInterceptionActive`).
+    func setCaptureInterceptionActive(_ active: Bool)
+
+    /// True when the key matches the user's configured word-accept binding. The emoji picker commits
+    /// on this key so its commit stays consistent with accepting a suggestion word.
+    func isWordAcceptKey(_ keyEvent: InputMonitorKeyEvent) -> Bool
 }
 
 @MainActor
@@ -101,6 +112,25 @@ protocol SuggestionInserting: AnyObject {
     var lastErrorMessage: String? { get }
 
     func insert(_ suggestion: String) -> Bool
+}
+
+/// The emoji picker's slice of the inserter: replace a run of already-typed characters (the literal
+/// `:query`) with the chosen glyph in one suppressed synthetic burst.
+@MainActor
+protocol EmojiTextInserting: AnyObject {
+    func replace(deletingUTF16Count: Int, with text: String) -> Bool
+}
+
+/// The emoji picker's slice of its floating panel: present/move/hide the match list. Behind a
+/// protocol so `EmojiPickerController` can be unit-tested without constructing a real `NSPanel`.
+@MainActor
+protocol EmojiPickerPanelPresenting: AnyObject {
+    var onSelectIndex: ((Int) -> Void)? { get set }
+    var onClickOutside: (() -> Void)? { get set }
+
+    func show(query: String, matches: [EmojiMatch], selectedIndex: Int, caretRect: CGRect, acceptKeyLabel: String?)
+    func setSelectedIndex(_ index: Int)
+    func hide()
 }
 
 @MainActor

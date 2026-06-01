@@ -10,56 +10,62 @@ extension SuggestionCoordinator {
     // MARK: - Acceptance and Session Reconciliation
 
     /// Accepts the next word of the current suggestion.
-    func acceptCurrentSuggestion(originalEvent: CapturedInputEvent? = nil) -> Bool {
-        acceptSuggestion(fullText: false, keyName: "Tab", originalEvent: originalEvent)
+    func acceptCurrentSuggestion() -> Bool {
+        acceptSuggestion(fullText: false, keyName: "Tab")
     }
 
     /// Accepts the entire remaining suggestion at once.
-    func acceptEntireSuggestion(originalEvent: CapturedInputEvent? = nil) -> Bool {
-        acceptSuggestion(fullText: true, keyName: "full-accept", originalEvent: originalEvent)
+    func acceptEntireSuggestion() -> Bool {
+        acceptSuggestion(fullText: true, keyName: "full-accept")
     }
 
     /// Shared acceptance path used by both word-by-word and full acceptance.
     private func acceptSuggestion(
         fullText: Bool,
-        keyName: String,
-        originalEvent: CapturedInputEvent?
+        keyName: String
     ) -> Bool {
         let snapshot = focusModel.snapshot
 
         guard permissionManager.inputMonitoringGranted else {
             return passTabThrough(
-                reason: "Input Monitoring permission is required before Cotabby can accept suggestions.",
-                replay: originalEvent
+                reason: "Input Monitoring permission is required before Cotabby can accept suggestions."
             )
         }
 
         guard case .supported = snapshot.capability, let rawContext = snapshot.context else {
-            return passTabThrough(reason: snapshot.capability.summary, replay: originalEvent)
+            return passTabThrough(reason: snapshot.capability.summary)
         }
 
         // Gate on the live session, not on `state`. A background refresh (notably the visual-context
         // path that calls `schedulePrediction` once OCR finishes) flips `state` to `.debouncing`
         // while the previous suggestion is still buffered and its overlay is still on screen — and
-        // the accept tap is still installed because the overlay is visible. Gating on `.ready` here
-        // would `passTabThrough` for the keystroke the accept tap just consumed, swallowing the
-        // user's accept and letting the background regeneration replace the suggestion they were
-        // trying to take. `validateSessionForAcceptance` still rejects the accept if the session no
-        // longer reconciles with the live AX state.
+        // the accept tap is still installed because the overlay is visible. Gating on `.ready`
+        // would let the key fall through even though the user sees ghost text they can still
+        // accept. `validateSessionForAcceptance` still rejects the accept if the session no longer
+        // reconciles with the live AX state.
         guard interactionState.activeSession != nil else {
             return passTabThrough(
-                reason: "Key passed through because no valid suggestion was ready.",
-                replay: originalEvent
+                reason: "Key passed through because no valid suggestion was ready."
             )
         }
 
-        let preparation = fullText
-            ? interactionState.prepareFullAcceptance(from: rawContext, overlayState: overlayState)
-            : interactionState.prepareAcceptance(
+        // `acceptEntireSuggestion` forces the full-acceptance path so the dedicated full-accept key
+        // stays a per-press override. `acceptCurrentSuggestion` honors the user-selected
+        // granularity for the primary accept key — the granularity enum is intentionally limited to
+        // partial modes (`.word`, `.phrase`), since whole-suggestion acceptance is exclusively the
+        // dedicated full-accept key's job.
+        let primaryGranularity = settingsSnapshot.acceptanceGranularity
+        let preparation: SuggestionAcceptancePreparation
+        if fullText {
+            preparation = interactionState.prepareFullAcceptance(from: rawContext, overlayState: overlayState)
+        } else {
+            preparation = interactionState.prepareAcceptance(
                 from: rawContext,
                 overlayState: overlayState,
+                granularity: primaryGranularity,
                 autoAcceptTrailingPunctuation: settingsSnapshot.autoAcceptTrailingPunctuation
             )
+        }
 
         let liveContext: FocusedInputContext
         let sessionForAcceptance: ActiveSuggestionSession
@@ -71,7 +77,7 @@ extension SuggestionCoordinator {
             acceptedChunk = preparedAcceptedChunk
 
         case let .invalid(reason):
-            return passTabThrough(reason: reason, replay: originalEvent)
+            return passTabThrough(reason: reason)
         }
 
         // Reconcile the word boundary against the *live* preceding text instead of trusting the
@@ -99,11 +105,6 @@ extension SuggestionCoordinator {
                 message: message,
                 normalizedOutput: insertionChunk
             )
-            // Replay the consumed accept key so the host app still receives the keystroke.
-            // Without this, a transient insertion failure silently swallows the user's Tab.
-            if let originalEvent {
-                inputMonitor.replayConsumedAcceptKey(keyCode: originalEvent.keyCode, flags: originalEvent.flags)
-            }
             return false
         }
 
@@ -122,6 +123,10 @@ extension SuggestionCoordinator {
             hideOverlay(reason: "Overlay hidden because \(keyName) accepted the final suggestion chunk.")
             latestAcceptanceAction = "Accepted final chunk with \(keyName)."
             state = .idle
+            // Remember what we just committed and the text it followed. `apply` consumes this to drop
+            // a regeneration that only re-proposes the same tail before the host publishes the insert
+            // (see the `schedulePredictionAfterHostPublishDelay` rationale below).
+            lastAcceptedTail = AcceptedSuggestionTail(text: acceptedChunk, precedingText: liveContext.precedingText)
             logStage(
                 "\(keyName)-accepted-final-chunk",
                 workID: currentWorkID,
@@ -129,7 +134,14 @@ extension SuggestionCoordinator {
                 message: "Inserted the final suggestion chunk and queued a refresh.",
                 normalizedOutput: acceptedChunk
             )
-            schedulePrediction()
+            // Wait for the host to actually publish the inserted text before regenerating. A bare
+            // `schedulePrediction()` here reads pre-insertion AX in Chromium editors (the publish lags
+            // the synthetic keystroke), so the model re-proposes the word just accepted and the next
+            // accept re-inserts it. That is the final-word accept/regenerate/accept loop reported as
+            // the suggestion "flickering" without committing. Polling until the insert surfaces (the
+            // same path typing uses) makes the regeneration read the settled text and return a genuine
+            // next suggestion, or nothing.
+            schedulePredictionAfterHostPublishDelay()
             return true
 
         case let .advanced(advancedSession, _):
@@ -164,21 +176,15 @@ extension SuggestionCoordinator {
 
     /// Returns control of the accept key to the host app and clears stale suggestion UI.
     ///
-    /// When `replay` is supplied (the original captured event from `handleInputEvent`), this
-    /// re-posts that key to the focused app *after* hiding the overlay — `hideOverlay` flips the
-    /// overlay state to `.hidden`, which tears down the active accept tap, so the replay reaches
-    /// the focused app without the tap re-consuming it. This is the only thing standing between
-    /// the user and a silently-swallowed Tab when the coordinator bails on acceptance after the
-    /// accept tap already consumed the keystroke (notably Gmail / browser AX races).
-    func passTabThrough(reason: String, replay: CapturedInputEvent? = nil) -> Bool {
+    /// `InputMonitor` calls this from the consuming tap before returning a callback result. A `false`
+    /// return tells that tap to pass the original key event through naturally, so no synthetic
+    /// replay is needed.
+    func passTabThrough(reason: String) -> Bool {
         let generation = latestGenerationNumber
         cancelPredictionWork()
         clearSuggestion(clearDiagnostics: true)
         hideOverlay(reason: reason)
         state = .idle
-        if let replay {
-            inputMonitor.replayConsumedAcceptKey(keyCode: replay.keyCode, flags: replay.flags)
-        }
         logStage(
             "tab-passed-through",
             workID: currentWorkID,
@@ -373,7 +379,8 @@ extension SuggestionCoordinator {
             caretQuality: context.caretQuality,
             observedCharWidth: context.observedCharWidth,
             isRightToLeft: isRightToLeft,
-            focusChangeSequence: context.focusChangeSequence
+            focusChangeSequence: context.focusChangeSequence,
+            focusedInputIdentityKey: context.focusedInputIdentityKey
         )
         if let message = overlayPresenter.present(
             text: text,
@@ -432,5 +439,19 @@ extension SuggestionCoordinator {
             rawOutput: rawOutput,
             normalizedOutput: normalizedOutput
         )
+
+        // Mirror the stage into the structured JSONL stream so an AI debugger can join every event
+        // touching one suggestion via `request_id`. `latestRequestID` is set when `+Prediction`
+        // builds the request and cleared between sessions; logs outside an active request still
+        // carry a placeholder so the field shape is stable for `jq`.
+        var metadata: Logger.Metadata = [
+            "stage": .string(stage),
+            "work_id": .stringConvertible(workID),
+            "request_id": .string(latestRequestID ?? "req_none")
+        ]
+        if let generation {
+            metadata["generation"] = .stringConvertible(generation)
+        }
+        CotabbyLogger.suggestion.debug(.init(stringLiteral: message), metadata: metadata)
     }
 }

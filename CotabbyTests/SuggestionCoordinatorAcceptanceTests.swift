@@ -1,0 +1,319 @@
+import Combine
+import Foundation
+import XCTest
+@testable import Cotabby
+
+/// Tests the coordinator-level acceptance contract.
+///
+/// `InputMonitor` owns the physical key event, but `SuggestionCoordinator` remains the final
+/// validator for whether visible ghost text can be committed. These tests keep that boundary
+/// explicit so future state-machine edits do not accidentally reintroduce `.ready` as a hard gate.
+final class SuggestionCoordinatorAcceptanceTests: XCTestCase {
+    private static var retainedCoordinators: [SuggestionCoordinator] = []
+
+    override func tearDown() {
+        runOnMainActor {
+            Self.retainedCoordinators.removeAll()
+        }
+        super.tearDown()
+    }
+
+    func test_acceptCurrentSuggestionAllowsVisibleSessionWhileDebugStateIsDebouncing() {
+        runOnMainActor {
+            let snapshot = CotabbyTestFixtures.focusedInputSnapshot(precedingText: "Hello")
+            let context = FocusedInputContext(snapshot: snapshot, generation: 7)
+            let interactionState = SuggestionInteractionState()
+            let session = interactionState.startSession(
+                fullText: " world again",
+                liveContext: context,
+                latency: 0.1
+            )
+            let overlayState = OverlayState.visible(
+                text: session.remainingText,
+                geometry: CotabbyTestFixtures.overlayGeometry(caretRect: context.caretRect),
+                mode: .inline
+            )
+            let inputMonitor = StubSuggestionInputMonitor()
+            let inserter = StubSuggestionInserter()
+            let coordinator = makeCoordinator(
+                snapshot: snapshot,
+                overlayState: overlayState,
+                inputMonitor: inputMonitor,
+                inserter: inserter,
+                interactionState: interactionState
+            )
+            coordinator.state = .debouncing
+
+            XCTAssertTrue(
+                inputMonitor.shouldConsumeAcceptKeyProvider(),
+                "Preflight should depend on visible overlay, not `.ready`."
+            )
+            XCTAssertTrue(coordinator.acceptCurrentSuggestion())
+
+            XCTAssertEqual(inserter.insertedChunks, [" world"])
+            XCTAssertEqual(coordinator.latestAcceptanceAction, "Accepted next chunk with Tab.")
+            guard case let .ready(remainingText, _) = coordinator.state else {
+                XCTFail("Partial acceptance should leave the remaining suggestion ready.")
+                return
+            }
+            XCTAssertEqual(remainingText, " again")
+        }
+    }
+
+    func test_acceptCurrentSuggestionCleansVisibleOverlayWhenSessionDisappears() {
+        runOnMainActor {
+            let snapshot = CotabbyTestFixtures.focusedInputSnapshot(precedingText: "Hello")
+            let context = FocusedInputContext(snapshot: snapshot, generation: 7)
+            let overlayState = OverlayState.visible(
+                text: " stale",
+                geometry: CotabbyTestFixtures.overlayGeometry(caretRect: context.caretRect),
+                mode: .inline
+            )
+            let inputMonitor = StubSuggestionInputMonitor()
+            let inserter = StubSuggestionInserter()
+            let coordinator = makeCoordinator(
+                snapshot: snapshot,
+                overlayState: overlayState,
+                inputMonitor: inputMonitor,
+                inserter: inserter,
+                interactionState: SuggestionInteractionState()
+            )
+            coordinator.state = .debouncing
+
+            XCTAssertTrue(
+                inputMonitor.shouldConsumeAcceptKeyProvider(),
+                "A visible stale overlay should still route the accept key into the coordinator for cleanup."
+            )
+            XCTAssertFalse(coordinator.acceptCurrentSuggestion())
+
+            XCTAssertTrue(inserter.insertedChunks.isEmpty)
+            XCTAssertFalse(coordinator.overlayState.isVisible)
+            XCTAssertEqual(coordinator.state, .idle)
+        }
+    }
+
+    func test_acceptingFinalChunkDefersRegenerationAndRecordsAcceptedTail() {
+        runOnMainActor {
+            let snapshot = CotabbyTestFixtures.focusedInputSnapshot(precedingText: "what's on your mind")
+            let context = FocusedInputContext(snapshot: snapshot, generation: 7)
+            let interactionState = SuggestionInteractionState()
+            let session = interactionState.startSession(
+                fullText: " today",
+                liveContext: context,
+                latency: 0.1
+            )
+            let overlayState = OverlayState.visible(
+                text: session.remainingText,
+                geometry: CotabbyTestFixtures.overlayGeometry(caretRect: context.caretRect),
+                mode: .inline
+            )
+            let inputMonitor = StubSuggestionInputMonitor()
+            let inserter = StubSuggestionInserter()
+            let coordinator = makeCoordinator(
+                snapshot: snapshot,
+                overlayState: overlayState,
+                inputMonitor: inputMonitor,
+                inserter: inserter,
+                interactionState: interactionState
+            )
+
+            XCTAssertTrue(coordinator.acceptCurrentSuggestion())
+
+            XCTAssertEqual(inserter.insertedChunks, [" today"])
+            // The final-chunk accept must not immediately re-enter debouncing. It waits for the host
+            // to publish the insert, so synchronously the coordinator is idle with the overlay hidden.
+            XCTAssertEqual(coordinator.state, .idle)
+            XCTAssertFalse(coordinator.overlayState.isVisible)
+            // It records what it committed so `apply` can drop a stale echo of the same tail.
+            XCTAssertEqual(
+                coordinator.lastAcceptedTail,
+                AcceptedSuggestionTail(text: " today", precedingText: "what's on your mind")
+            )
+        }
+    }
+
+    @MainActor
+    private func makeCoordinator(
+        snapshot: FocusedInputSnapshot,
+        overlayState: OverlayState,
+        inputMonitor: StubSuggestionInputMonitor,
+        inserter: StubSuggestionInserter,
+        interactionState: SuggestionInteractionState
+    ) -> SuggestionCoordinator {
+        let focusSnapshot = FocusSnapshot(
+            applicationName: snapshot.applicationName,
+            bundleIdentifier: snapshot.bundleIdentifier,
+            capability: .supported,
+            context: snapshot,
+            inspection: nil
+        )
+        let coordinator = SuggestionCoordinator(
+            permissionManager: StubSuggestionPermissionProvider(),
+            focusModel: StubSuggestionFocusProvider(snapshot: focusSnapshot),
+            inputMonitor: inputMonitor,
+            overlayController: StubSuggestionOverlayController(state: overlayState),
+            suggestionInserter: inserter,
+            suggestionEngine: StubSuggestionEngine(),
+            suggestionSettings: StubSuggestionSettingsProvider(),
+            clipboardContextProvider: StubClipboardContextProvider(),
+            clipboardRelevanceFilter: StubClipboardRelevanceFilter(),
+            visualContextCoordinator: StubVisualContextCoordinator(),
+            interactionState: interactionState,
+            workController: SuggestionWorkController(),
+            configuration: .standard,
+            userDefaults: UserDefaults(suiteName: "CotabbyTests.\(UUID().uuidString)") ?? .standard
+        )
+        Self.retainedCoordinators.append(coordinator)
+        return coordinator
+    }
+}
+
+@MainActor
+private final class StubSuggestionPermissionProvider: SuggestionPermissionProviding {
+    var inputMonitoringGranted = true
+    var screenRecordingGranted = true
+
+    private let inputSubject = PassthroughSubject<Bool, Never>()
+    private let screenSubject = PassthroughSubject<Bool, Never>()
+
+    var inputMonitoringGrantedPublisher: AnyPublisher<Bool, Never> {
+        inputSubject.eraseToAnyPublisher()
+    }
+
+    var screenRecordingGrantedPublisher: AnyPublisher<Bool, Never> {
+        screenSubject.eraseToAnyPublisher()
+    }
+}
+
+@MainActor
+private final class StubSuggestionFocusProvider: SuggestionFocusProviding {
+    var snapshot: FocusSnapshot
+
+    private let snapshotSubject = PassthroughSubject<FocusSnapshot, Never>()
+
+    var snapshotPublisher: AnyPublisher<FocusSnapshot, Never> {
+        snapshotSubject.eraseToAnyPublisher()
+    }
+
+    init(snapshot: FocusSnapshot) {
+        self.snapshot = snapshot
+    }
+
+    func refreshNow() {}
+}
+
+@MainActor
+private final class StubSuggestionInputMonitor: SuggestionInputMonitoring {
+    var onEvent: ((CapturedInputEvent) -> Bool)?
+    var onSuppressedSyntheticInput: (() -> Void)?
+    var shouldConsumeAcceptKeyProvider: @MainActor @Sendable () -> Bool = { false }
+    private(set) var acceptInterceptionRequests: [Bool] = []
+
+    func setAcceptInterceptionActive(_ active: Bool) {
+        acceptInterceptionRequests.append(active)
+    }
+}
+
+@MainActor
+private final class StubSuggestionOverlayController: SuggestionOverlayControlling {
+    var state: OverlayState
+    var onStateChange: ((OverlayState) -> Void)?
+
+    init(state: OverlayState) {
+        self.state = state
+    }
+
+    func showSuggestion(_ text: String, geometry: SuggestionOverlayGeometry) {
+        state = .visible(text: text, geometry: geometry, mode: .inline)
+        onStateChange?(state)
+    }
+
+    func hide(reason: String) {
+        state = .hidden(reason: reason)
+        onStateChange?(state)
+    }
+}
+
+@MainActor
+private final class StubSuggestionInserter: SuggestionInserting {
+    var lastErrorMessage: String?
+    var insertedChunks: [String] = []
+    var shouldInsert = true
+
+    func insert(_ suggestion: String) -> Bool {
+        insertedChunks.append(suggestion)
+        return shouldInsert
+    }
+}
+
+private enum StubSuggestionEngineError: Error {
+    case unexpectedGeneration
+}
+
+@MainActor
+private final class StubSuggestionEngine: SuggestionGenerating {
+    func generateSuggestion(for request: SuggestionRequest) async throws -> SuggestionResult {
+        throw StubSuggestionEngineError.unexpectedGeneration
+    }
+
+    func resetCachedGenerationContext() async {}
+}
+
+@MainActor
+private final class StubSuggestionSettingsProvider: SuggestionSettingsProviding {
+    var snapshot = CotabbyTestFixtures.settingsSnapshot()
+
+    private let snapshotSubject = PassthroughSubject<SuggestionSettingsSnapshot, Never>()
+
+    var snapshotPublisher: AnyPublisher<SuggestionSettingsSnapshot, Never> {
+        snapshotSubject.eraseToAnyPublisher()
+    }
+}
+
+@MainActor
+private final class StubClipboardContextProvider: ClipboardContextProviding {
+    var currentChangeCount = 0
+
+    func currentContext() -> String? {
+        nil
+    }
+}
+
+@MainActor
+private final class StubClipboardRelevanceFilter: ClipboardRelevanceFiltering {
+    func filter(
+        clipboard: String?,
+        pasteboardChangeCount: Int,
+        precedingText: String
+    ) -> String? {
+        nil
+    }
+}
+
+@MainActor
+private final class StubVisualContextCoordinator: VisualContextCoordinating {
+    var status: VisualContextStatus = .idle
+    var latestExcerpt: String?
+    var onStateChange: ((VisualContextStatus, String?) -> Void)?
+    var onInjectedContextReady: ((FocusedInputIdentity) -> Void)?
+
+    func startSessionIfNeeded(for snapshotContext: FocusedInputSnapshot) {}
+
+    func cancel(resetState: Bool) {}
+
+    func excerpt(for context: FocusedInputContext) -> String? {
+        nil
+    }
+}
+
+private func runOnMainActor<Result>(
+    _ body: @MainActor () throws -> Result
+) rethrows -> Result {
+    if Thread.isMainThread {
+        return try MainActor.assumeIsolated(body)
+    }
+
+    return try DispatchQueue.main.sync {
+        try MainActor.assumeIsolated(body)
+    }
+}

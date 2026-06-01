@@ -12,7 +12,8 @@ import Foundation
 /// User-facing presets that bound how long one inline suggestion may be.
 /// Treating this as an enum keeps the UI and prompt policy in one source of truth.
 enum SuggestionWordCountPreset: String, CaseIterable, Equatable, Hashable, Sendable, Identifiable {
-    case threeToSeven = "3-7"
+    case twoToFour = "2-4"
+    case fourToSeven = "4-7"
     case sevenToTwelve = "7-12"
     case twelveToTwenty = "12-20"
 
@@ -30,8 +31,10 @@ enum SuggestionWordCountPreset: String, CaseIterable, Equatable, Hashable, Senda
 
     var promptInstruction: String {
         switch self {
-        case .threeToSeven:
-            return "Return only the next 3 to 7 words."
+        case .twoToFour:
+            return "Return only the next 2 to 4 words."
+        case .fourToSeven:
+            return "Return only the next 4 to 7 words."
         case .sevenToTwelve:
             return "Return only the next 7 to 12 words."
         case .twelveToTwenty:
@@ -43,10 +46,12 @@ enum SuggestionWordCountPreset: String, CaseIterable, Equatable, Hashable, Senda
     /// word-range cue was removed), so it must track the upper word bound closely. Sized at
     /// ~1.5x the upper word count to leave headroom for multi-token words (contractions, proper
     /// nouns, punctuation) without overrunning the preset. The earlier 50% bump (17/27/45) let
-    /// completions blow past the setting — e.g. ~12 words on the 3-7 preset (#271).
+    /// completions blow past the setting, e.g. ~12 words on the shortest preset (#271).
     var suggestedPredictionTokenBudget: Int {
         switch self {
-        case .threeToSeven:
+        case .twoToFour:
+            return 6
+        case .fourToSeven:
             return 11
         case .sevenToTwelve:
             return 18
@@ -98,9 +103,9 @@ struct SuggestionConfiguration: Equatable, Sendable {
     static let standard = SuggestionConfiguration(
         // Keep completions short so ghost text stays fast and easy to accept.
         maxPredictionTokens: 8,
-        // Aggressive debounce: 50ms is enough for most apps to publish AX state. The KV cache
-        // reuse path handles prefix changes gracefully if AX is occasionally one char stale.
-        debounceMilliseconds: 50,
+        // Aggressive debounce: 20ms keeps time-to-first-suggestion low while still collapsing
+        // bursts (superseded generations are cancelled; the host-publish poll absorbs AX lag).
+        debounceMilliseconds: 20,
         // Low temperature keeps inline completions stable and less likely to drift.
         temperature: 0.1,
         topK: 20,
@@ -122,7 +127,7 @@ struct SuggestionConfiguration: Equatable, Sendable {
         // Seed the profile settings with lightweight defaults on first launch.
         defaultUserName: "Jacob",
         defaultWordCountPreset: .twelveToTwenty,
-        focusPollIntervalMilliseconds: 80
+        focusPollIntervalMilliseconds: 50
     )
 }
 
@@ -177,6 +182,21 @@ struct FocusedInputContext: Equatable, Sendable {
         )
     }
 
+    /// Stable per-process key for the focused field, intentionally NOT including the input frame
+    /// rect. The polling signature in `FocusTracker` bumps `focusChangeSequence` whenever the
+    /// field's frame changes (e.g., a chat composer growing taller as the user types wraps onto a
+    /// second line). For consumers that should treat self-resizing as "same field" — chief among
+    /// them ghost-font stabilization — this key gives them a session identity that survives field
+    /// growth. `hashValue` is randomized per process, which is fine: the key is only ever compared
+    /// within one process's lifetime.
+    var focusedInputIdentityKey: UInt64 {
+        var hasher = Hasher()
+        hasher.combine(bundleIdentifier)
+        hasher.combine(processIdentifier)
+        hasher.combine(elementIdentifier)
+        return UInt64(bitPattern: Int64(hasher.finalize()))
+    }
+
     /// Content-only fingerprint — mirrors `FocusedInputSnapshot.contentSignature`.
     /// See that type's doc comment for why `elementIdentifier` is excluded.
     var contentSignature: String {
@@ -221,6 +241,11 @@ struct SuggestionRequest: Equatable, Sendable {
     /// User-authored style rules rendered as additional prompt directives, subordinate to the base
     /// autocomplete/safety rules. Empty when the user has none.
     let customRules: [String]
+    /// User-authored free-form context (glossary, jargon, style notes) injected verbatim into the
+    /// prompt. Already trimmed and length-capped upstream so renderers can treat it as a ready-to-use
+    /// string. `nil` when the user has not set it, distinguishing it from an empty-but-set value so
+    /// renderers can skip the heading entirely.
+    let extendedContext: String?
     /// Pre-rendered language hint built from the user's declared languages (e.g. "The user usually
     /// writes in German and English…"). `nil` when none are declared. Deliberately a hint, not an
     /// override: it tells the model to match the surrounding text and only fall back to the declared
@@ -232,6 +257,57 @@ struct SuggestionRequest: Equatable, Sendable {
     let visualContextSummary: String?
     /// When enabled, the normalizer keeps multiple lines instead of truncating to the first line.
     let isMultiLineEnabled: Bool
+    /// Correlation ID stamped onto every log line touching this request — coordinator state
+    /// transitions, router selection, engine generation, LLM I/O capture, insertion. Generated by
+    /// `RequestID.generate()` in `SuggestionRequestFactory`. Defaulted in the init so test fixtures
+    /// that build requests directly do not need to change.
+    let requestID: String
+
+    init(
+        context: FocusedInputContext,
+        prefixText: String,
+        prompt: String,
+        generation: UInt64,
+        maxPredictionTokens: Int,
+        temperature: Double,
+        topK: Int,
+        topP: Double,
+        minP: Double,
+        repetitionPenalty: Double,
+        randomSeed: UInt32?,
+        maxSuffixCharacters: Int,
+        completionLengthInstruction: String,
+        userName: String?,
+        customRules: [String],
+        extendedContext: String? = nil,
+        languageInstruction: String?,
+        clipboardContext: String?,
+        visualContextSummary: String?,
+        isMultiLineEnabled: Bool,
+        requestID: String = "req_unknown"
+    ) {
+        self.context = context
+        self.prefixText = prefixText
+        self.prompt = prompt
+        self.generation = generation
+        self.maxPredictionTokens = maxPredictionTokens
+        self.temperature = temperature
+        self.topK = topK
+        self.topP = topP
+        self.minP = minP
+        self.repetitionPenalty = repetitionPenalty
+        self.randomSeed = randomSeed
+        self.maxSuffixCharacters = maxSuffixCharacters
+        self.completionLengthInstruction = completionLengthInstruction
+        self.userName = userName
+        self.customRules = customRules
+        self.extendedContext = extendedContext
+        self.languageInstruction = languageInstruction
+        self.clipboardContext = clipboardContext
+        self.visualContextSummary = visualContextSummary
+        self.isMultiLineEnabled = isMultiLineEnabled
+        self.requestID = requestID
+    }
 }
 
 /// The engine's normalized response, including raw model text for debugging.
@@ -376,6 +452,16 @@ struct ActiveSuggestionSession: Equatable, Sendable {
     }
 }
 
+/// Records the chunk committed by the most recent full acceptance and the field text it was
+/// appended after. The coordinator stamps this on a final-chunk accept and consumes it on the next
+/// generation. If the model only re-proposes `text` while the live preceding text still equals
+/// `precedingText`, the host has not published our insert yet (the Chromium AX-publish race), so the
+/// suggestion is dropped instead of looping accept/regenerate/accept on the last word.
+struct AcceptedSuggestionTail: Equatable, Sendable {
+    let text: String
+    let precedingText: String
+}
+
 /// High-level suggestion states surfaced to the menu and overlay logic.
 enum SuggestionDebugState: Equatable {
     case idle
@@ -437,6 +523,12 @@ struct SuggestionOverlayGeometry: Equatable, Sendable {
     /// per-session font-size stabilization on this value, so a field switch (or focus loss) starts
     /// a fresh size baseline. Defaults to 0 for tests that do not exercise session-scoped behavior.
     let focusChangeSequence: UInt64
+    /// Stable identity for the focused input field, used to scope ghost-font stabilization.
+    /// Unlike `focusChangeSequence`, this does NOT change when the field resizes (e.g., a chat
+    /// composer growing taller as text wraps), so the stabilizer's per-session minimum survives
+    /// self-growing inputs. It DOES change when the user focuses a genuinely different field.
+    /// Defaults to 0 for tests that do not exercise session-scoped behavior.
+    let focusedInputIdentityKey: UInt64
 
     init(
         caretRect: CGRect,
@@ -444,7 +536,8 @@ struct SuggestionOverlayGeometry: Equatable, Sendable {
         caretQuality: CaretGeometryQuality,
         observedCharWidth: CGFloat?,
         isRightToLeft: Bool,
-        focusChangeSequence: UInt64 = 0
+        focusChangeSequence: UInt64 = 0,
+        focusedInputIdentityKey: UInt64 = 0
     ) {
         self.caretRect = caretRect
         self.inputFrameRect = inputFrameRect
@@ -452,6 +545,7 @@ struct SuggestionOverlayGeometry: Equatable, Sendable {
         self.observedCharWidth = observedCharWidth
         self.isRightToLeft = isRightToLeft
         self.focusChangeSequence = focusChangeSequence
+        self.focusedInputIdentityKey = focusedInputIdentityKey
     }
 }
 

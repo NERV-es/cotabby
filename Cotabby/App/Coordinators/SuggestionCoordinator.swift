@@ -51,6 +51,13 @@ final class SuggestionCoordinator: ObservableObject {
     let overlayPresenter: SuggestionOverlayPresenter
     let logger: SuggestionDebugLogger
 
+    /// Optional first-look hook the emoji picker installs to observe the keystroke stream. Called at
+    /// the very top of `handleInputEvent`, before any suggestion logic. Returns `true` when an emoji
+    /// capture is involved with this key, in which case the coordinator stands down so ghost text does
+    /// not compete with the picker. It never consumes keys here (the listen-only observer cannot);
+    /// consumption happens through `InputMonitor.emojiCaptureKeyDecider`.
+    var emojiInputObserver: ((CapturedInputEvent) -> Bool)?
+
     static let totalTabAcceptedWordCountDefaultsKey = "cotabbyTotalAcceptedWordCount"
 
     // Combine subscriptions are the coordinator's remaining direct mutable bookkeeping.
@@ -63,8 +70,23 @@ final class SuggestionCoordinator: ObservableObject {
     var pendingCacheReset: (sequence: UInt64, task: Task<Void, Never>)?
     // Cancellable post-insertion AX refresh so a new accept or invalidation can stop a stale one.
     var postInsertionRefreshTask: Task<Void, Never>?
-    // Cancellable host-publish polling so back-to-back keystrokes cleanly stop stale polls.
-    var hostPublishPollTask: Task<Void, Never>?
+    /// Monotonic cancellation token for the "wait until the host publishes typed text to AX" loop.
+    ///
+    /// Keystrokes can arrive faster than Chromium publishes contenteditable updates. Without this
+    /// token, every key starts its own delayed polling chain and those chains stack up, each doing
+    /// synchronous `refreshNow()` calls on the main actor. Bumping the token makes older chains
+    /// no-op before they can perform another expensive AX read.
+    var hostPublishPollGeneration: UInt64 = 0
+    /// Correlation ID for the most recently built `SuggestionRequest`. Stamped onto every
+    /// state-transition log line so all events tied to one suggestion (debounce → generating →
+    /// ready → accepted/rejected) can be joined with a single `jq` filter on `request_id`.
+    /// `nil` between sessions; replaced when `+Prediction` builds the next request.
+    var latestRequestID: String?
+    /// Set when a full acceptance commits its final chunk; consumed by the next `apply`. Lets the
+    /// coordinator drop a regeneration that only re-proposes the just-accepted tail before the host
+    /// publishes the insert, the Chromium AX-publish race that otherwise loops accept/regenerate/
+    /// accept on the last word. See `SuggestionSessionReconciler.isStaleAcceptanceEcho`.
+    var lastAcceptedTail: AcceptedSuggestionTail?
 
     init(
         permissionManager: any SuggestionPermissionProviding,
@@ -139,17 +161,13 @@ final class SuggestionCoordinator: ObservableObject {
             self?.handleSuppressedSyntheticInput()
         }
 
-        // Fail-open authorization for the active accept tap. The tap will only consume a
-        // keystroke when this predicate returns `true` at the moment the event arrives — i.e.,
-        // when the coordinator currently holds a ready, valid, visible suggestion session. Any
-        // lifecycle gap (tap left over after invalidate, stale settings race, etc.) collapses to
-        // "no" and the keystroke falls through to the host. Without this, the accept tap's
-        // matching predicate could swallow a keystroke based on stale state — exactly the
-        // "letter never reaches Chrome" report.
+        // Fail-open preflight for the active accept tap. The tap should only route a matching key
+        // into the coordinator while there is visible suggestion UI. We deliberately do not require
+        // `.ready` or even an active session here: a background refresh can move `state`, and if the
+        // session has gone stale the coordinator still needs one chance to hide the stale overlay
+        // before the tap passes the original key through.
         inputMonitor.shouldConsumeAcceptKeyProvider = { [weak self] in
             guard let self else { return false }
-            guard case .ready = self.state else { return false }
-            guard self.interactionState.activeSession != nil else { return false }
             guard self.overlayState.isVisible else { return false }
             return true
         }

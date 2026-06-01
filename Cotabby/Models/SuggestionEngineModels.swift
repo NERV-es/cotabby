@@ -45,6 +45,16 @@ struct DisabledApplicationRule: Codable, Equatable, Identifiable, Sendable {
     var id: String { bundleIdentifier }
 }
 
+/// How much of a buffered suggestion the primary accept key takes per press. The dedicated
+/// full-accept key always takes the entire remaining tail regardless of this setting, so this
+/// enum intentionally does not include a "full" case — that would duplicate the dedicated key.
+enum AcceptanceGranularity: String, CaseIterable, Codable, Sendable {
+    /// One word (with the existing trailing-punctuation policy applied per chunk).
+    case word
+    /// Words accumulated until a sentence terminator (`.`, `!`, `?`, `\n`) or the tail runs out.
+    case phrase
+}
+
 /// A compact snapshot of the autocomplete settings the coordinator actually needs at generation
 /// time. Keeping this as a value type makes change detection simple and deterministic.
 struct SuggestionSettingsSnapshot: Equatable, Sendable {
@@ -59,6 +69,10 @@ struct SuggestionSettingsSnapshot: Equatable, Sendable {
     /// User-authored style rules, carried in the snapshot so generation uses the same value the
     /// Settings UI shows.
     let customRules: [String]
+    /// Free-form glossary / terminology / style notes pasted by the user in the Extended Context
+    /// settings pane. Already trimmed and length-capped by `SuggestionSettingsModel`; empty string
+    /// when the user has not set it. Travels in the snapshot so generation reflects the live value.
+    let extendedContext: String
     /// The languages the user has declared they write in. Used to build a soft prompt hint; an empty
     /// set emits no directive (the renderers then just match the surrounding text). Never forces a
     /// language, so a code-switcher's other languages are preserved.
@@ -76,4 +90,7 @@ struct SuggestionSettingsSnapshot: Equatable, Sendable {
     /// based on caret geometry quality). Travels in the snapshot so consumers can react to changes
     /// without subscribing to the settings model directly.
     let mirrorPreference: MirrorPreference
+    /// How much of the buffered suggestion the primary accept key takes per press. Read once per
+    /// accept call so a mid-press setting change can't strand a partially-handled press.
+    let acceptanceGranularity: AcceptanceGranularity
 }

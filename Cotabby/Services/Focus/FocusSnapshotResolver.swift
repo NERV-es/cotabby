@@ -14,14 +14,31 @@ struct FocusSnapshotResolver {
     /// Throttle window for the deep caret BFS. ~100ms keeps the walk off the per-keystroke hot path
     /// in Chromium editors while staying short enough that caret lag during fast typing stays minor.
     private static let deepWalkThrottleInterval: TimeInterval = 0.1
+    /// Maximum UTF-16 units kept on each side of the caret in focus snapshots.
+    ///
+    /// The prompt builder uses a much smaller suffix of `precedingText`, and autocomplete only needs
+    /// a short trailing window for normalization. Keeping the focus snapshot bounded prevents a
+    /// large editor buffer from flowing through equality checks, Combine publishes, and stale-result
+    /// signatures on every AX refresh.
+    private static let focusedTextContextWindowUTF16 = 4096
 
     /// Carries deep-walk throttle state across the value-typed resolver's non-mutating polls.
     private let deepWalkThrottle = DeepGeometryWalkThrottle()
 
-    // MARK: - Debug AX tree dump (temporary — remove after caret placement is fixed)
-    /// Set to true to print the AX tree every time focus changes. Check Xcode console.
-    private static let dumpAXTree = false
+    // MARK: - Debug AX tree dump
+    /// Bundle identifier we automatically dump the AX tree for when `-cotabby-debug` is on.
+    /// Chrome's contenteditable surfaces are the source of most caret-placement and host-AX-publish
+    /// reports, so the dump exists primarily for triaging those — extend the gate (or replace the
+    /// constant) once another bundle needs the same treatment.
+    private static let dumpAXBundleIdentifier = "com.google.Chrome"
+    /// Last focused-element identifier we wrote to disk. The dump only runs when this changes, so
+    /// rapid focus events inside the same field don't repeatedly overwrite the file mid-inspection.
     private static var lastDumpedElementID: String?
+    private static let dumpTimestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 
     init(geometryResolver: AXTextGeometryResolver? = nil) {
         self.geometryResolver = geometryResolver ?? AXTextGeometryResolver()
@@ -46,35 +63,43 @@ struct FocusSnapshotResolver {
         let focusedElementIdentifier = AXHelper.elementIdentifier(
             for: focusedElement, bundleIdentifier: bundleIdentifier)
 
-        // Dump once per element change so it doesn't spam on repeated focus/value notifications.
-        if Self.dumpAXTree, Self.lastDumpedElementID != focusedElementIdentifier {
+        // Auto-dump on debug builds only, and only when focus lands on the configured bundle
+        // (currently Chrome). Debounced by element identity so rapid focus/value notifications
+        // inside the same field don't overwrite the file mid-inspection.
+        if CotabbyDebugOptions.isEnabled,
+           bundleIdentifier == Self.dumpAXBundleIdentifier,
+           Self.lastDumpedElementID != focusedElementIdentifier {
             Self.lastDumpedElementID = focusedElementIdentifier
-            printAXTreeDump(
-                focusedElement: focusedElement, app: applicationName, bundle: bundleIdentifier)
+            writeAXTreeDumpToDesktop(
+                focusedElement: focusedElement,
+                app: applicationName,
+                bundle: bundleIdentifier
+            )
         }
 
-        let candidates = candidateElements(around: focusedElement).map {
-            candidateSnapshot(for: $0, bundleIdentifier: bundleIdentifier)
-        }
-        let resolution = FocusCapabilityResolver.resolve(
-            candidates: candidates.map(\.resolverCandidate))
-        let selectedCandidate = resolution.bestDiagnosticCandidate.flatMap { candidate in
-            candidates.first(where: { $0.elementIdentifier == candidate.elementIdentifier })
-        }
+        // Chromium/Electron focus a wrapper several levels above the real editable, so for those
+        // apps we additionally search descendants for the editable node.
+        let deepDescendants = BrowserAppDetector.needsWebAccessibilityPriming(
+            bundleIdentifier: bundleIdentifier)
+        let candidateResolution = resolveCandidate(
+            around: focusedElement,
+            bundleIdentifier: bundleIdentifier,
+            deepDescendants: deepDescendants
+        )
+        let resolution = candidateResolution.resolution
+        let diagnosticCandidate = candidateResolution.diagnosticCandidate
         let inspection = FocusInspectionSnapshot(
             focusedElementIdentifier: focusedElementIdentifier,
             focusedRole: focusedRole,
             focusedSubrole: focusedSubrole,
-            resolvedElementIdentifier: selectedCandidate?.elementIdentifier,
-            resolvedRole: selectedCandidate?.role,
-            resolvedSubrole: selectedCandidate?.subrole,
+            resolvedElementIdentifier: diagnosticCandidate?.elementIdentifier,
+            resolvedRole: diagnosticCandidate?.role,
+            resolvedSubrole: diagnosticCandidate?.subrole,
             missingCapabilities: resolution.resolvedCandidate == nil
                 ? resolution.missingCapabilities : []
         )
 
-        guard let resolvedCandidate = selectedCandidate,
-            resolution.resolvedCandidate != nil
-        else {
+        guard let resolvedCandidate = candidateResolution.resolvedCandidate else {
             CotabbyLogger.focus.trace("Focus unsupported in \(applicationName): \(resolution.unsupportedReason)")
             return FocusSnapshot(
                 applicationName: applicationName,
@@ -171,9 +196,10 @@ struct FocusSnapshotResolver {
         let caretQuality = caret.quality
         let observedCharWidth = caret.observedCharWidth
 
-        let nsValue = value as NSString
-        let safeSelectionLocation = min(selection.location, nsValue.length)
-        let trailingStart = min(selection.location + selection.length, nsValue.length)
+        let contextWindow = boundedContextWindow(text: value, selection: selection)
+        let nsValue = contextWindow.text as NSString
+        let safeSelectionLocation = min(contextWindow.selection.location, nsValue.length)
+        let trailingStart = min(contextWindow.selection.location + contextWindow.selection.length, nsValue.length)
         let context = FocusedInputSnapshot(
             applicationName: applicationName,
             bundleIdentifier: bundleIdentifier,
@@ -188,7 +214,7 @@ struct FocusSnapshotResolver {
             observedCharWidth: observedCharWidth,
             precedingText: nsValue.substring(to: safeSelectionLocation),
             trailingText: nsValue.substring(from: trailingStart),
-            selection: selection,
+            selection: contextWindow.selection,
             isSecure: resolvedCandidate.isSecure,
             focusChangeSequence: focusChangeSequence
         )
@@ -222,7 +248,87 @@ struct FocusSnapshotResolver {
         )
     }
 
-    private func candidateElements(around focusedElement: AXUIElement) -> [AXUIElement] {
+    /// Resolves candidate elements lazily and stops as soon as the first fully capable editable
+    /// target is found.
+    ///
+    /// The old eager map built an `AXFocusCandidate` for every nearby Chromium node before asking
+    /// `FocusCapabilityResolver` to pick the first supported one. In large web editors that meant
+    /// reading text/selection/caret data from many wrapper and static-text nodes even after the real
+    /// input target had already been discovered. This preserves the resolver's "first full
+    /// capability wins" policy while avoiding unnecessary synchronous AX IPC.
+    private func resolveCandidate(
+        around focusedElement: AXUIElement,
+        bundleIdentifier: String,
+        deepDescendants: Bool
+    ) -> FocusCandidateResolution {
+        var bestPartial: (candidate: AXFocusCandidate, evaluation: FocusCapabilityCandidateEvaluation)?
+        var inspectedCount = 0
+
+        for element in candidateElements(around: focusedElement, deepDescendants: deepDescendants) {
+            inspectedCount += 1
+            let candidate = candidateSnapshot(for: element, bundleIdentifier: bundleIdentifier)
+            let evaluation = FocusCapabilityResolver.evaluate(candidate.resolverCandidate)
+
+            if evaluation.hasFullCapabilities {
+                return FocusCandidateResolution(
+                    resolvedCandidate: candidate,
+                    diagnosticCandidate: candidate,
+                    resolution: FocusCapabilityResolution(
+                        selectedEvaluation: evaluation,
+                        inspectedCandidateCount: inspectedCount
+                    )
+                )
+            }
+
+            if bestPartial == nil || evaluation.score > bestPartial!.evaluation.score {
+                bestPartial = (candidate, evaluation)
+            }
+        }
+
+        return FocusCandidateResolution(
+            resolvedCandidate: nil,
+            diagnosticCandidate: bestPartial?.candidate,
+            resolution: FocusCapabilityResolution(
+                selectedEvaluation: bestPartial?.evaluation,
+                inspectedCandidateCount: inspectedCount
+            )
+        )
+    }
+
+    /// Returns a caret-adjacent text window and rewrites `selection` into that window's coordinate
+    /// space. `NSRange` is UTF-16 based, so all slicing goes through `NSString`.
+    private func boundedContextWindow(text: String, selection: NSRange) -> (text: String, selection: NSRange) {
+        let nsText = text as NSString
+        guard nsText.length > 0 else {
+            return (text, NSRange(location: 0, length: 0))
+        }
+
+        let safeLocation = min(max(selection.location, 0), nsText.length)
+        let requestedEnd = selection.location > Int.max - selection.length
+            ? Int.max
+            : selection.location + selection.length
+        let safeEnd = min(max(requestedEnd, safeLocation), nsText.length)
+        let beforeStart = max(0, safeLocation - Self.focusedTextContextWindowUTF16)
+        let afterEnd = min(nsText.length, safeEnd + Self.focusedTextContextWindowUTF16)
+        let rawWindow = NSRange(location: beforeStart, length: afterEnd - beforeStart)
+        let composedWindow = nsText.rangeOfComposedCharacterSequences(for: rawWindow)
+        let windowText = nsText.substring(with: composedWindow)
+
+        let adjustedLocation = max(0, safeLocation - composedWindow.location)
+        let adjustedLength = min(
+            safeEnd - safeLocation,
+            max(0, composedWindow.length - adjustedLocation)
+        )
+
+        return (
+            windowText,
+            NSRange(location: adjustedLocation, length: adjustedLength)
+        )
+    }
+
+    private func candidateElements(
+        around focusedElement: AXUIElement, deepDescendants: Bool = false
+    ) -> [AXUIElement] {
         var ordered: [AXUIElement] = []
         var seen = Set<String>()
 
@@ -266,7 +372,72 @@ struct FocusSnapshotResolver {
             }
         }
 
+        // Chromium reports focus on a wrapper above the editable (AXWebArea → AXGroup → … →
+        // AXTextField), so the shallow walk above can miss the real target. Search descendants for
+        // editable-looking nodes, bounded in depth and count and appending only likely editables
+        // (not every visited node) so per-tick candidateSnapshot cost stays in check.
+        if deepDescendants {
+            appendEditableDescendants(of: [focusedElement] + ancestors, append: append)
+        }
+
         return ordered
+    }
+
+    /// Bounded BFS for editable-looking descendants, used only for Chromium/Electron. Traverses up
+    /// to `maxVisits` nodes / `maxDepth` deep but appends at most `maxAppended` likely-editable
+    /// nodes, keeping the downstream snapshotting cost roughly constant.
+    private func appendEditableDescendants(
+        of roots: [AXUIElement], append: (AXUIElement?) -> Void
+    ) {
+        let maxDepth = 6
+        let maxVisits = 200
+        let maxAppended = 12
+        var visited = 0
+        var appended = 0
+        var seenIdentity = Set<String>()
+        var queue: [(element: AXUIElement, depth: Int)] = roots.map { ($0, 0) }
+
+        while !queue.isEmpty, visited < maxVisits, appended < maxAppended {
+            let (element, depth) = queue.removeFirst()
+            guard seenIdentity.insert(AXHelper.elementIdentity(for: element)).inserted else {
+                continue
+            }
+            visited += 1
+
+            if looksEditable(element) {
+                append(element)
+                appended += 1
+            }
+
+            if depth < maxDepth {
+                for child in AXHelper.childElements(of: element) {
+                    queue.append((child, depth + 1))
+                }
+            }
+        }
+    }
+
+    /// Cheap editability probe for the descendant search: a known editable role, an explicit
+    /// editable flag, or either selection surface (native range or Chromium text markers). Cheaper
+    /// than a full `candidateSnapshot`, so it is safe to run across the bounded BFS.
+    private func looksEditable(_ element: AXUIElement) -> Bool {
+        let role = AXHelper.stringValue(for: kAXRoleAttribute as CFString, on: element) ?? ""
+        if AXHelper.isKnownEditableRole(role) {
+            return true
+        }
+        if AXHelper.isKnownReadOnlyRole(role) {
+            return false
+        }
+        let attributes = Set(AXHelper.attributeNames(on: element))
+        if attributes.contains("AXSelectedTextMarkerRange")
+            || attributes.contains(kAXSelectedTextRangeAttribute as String) {
+            return true
+        }
+        if attributes.contains("AXEditable"),
+            AXHelper.boolValue(for: "AXEditable" as CFString, on: element) == true {
+            return true
+        }
+        return false
     }
 
     /// Runs deep geometry search from the resolved editable candidate first, then falls back to
@@ -403,14 +574,57 @@ struct FocusSnapshotResolver {
             supportedAttributes.contains("AXEditable")
             ? AXHelper.boolValue(for: "AXEditable" as CFString, on: element)
             : nil
-        let textValue =
-            supportedAttributes.contains(kAXValueAttribute as String)
-            ? AXHelper.stringValue(for: kAXValueAttribute as CFString, on: element)
-            : nil
-        let selection =
-            supportedAttributes.contains(kAXSelectedTextRangeAttribute as String)
+        let editableHintScore = AXHelper.editabilityHintScore(
+            role: role,
+            explicitEditableFlag: explicitEditableFlag
+        )
+        let hasStrongEditabilitySignal = AXHelper.hasStrongEditabilitySignal(
+            role: role,
+            explicitEditableFlag: explicitEditableFlag
+        )
+        let isKnownReadOnlyRole = AXHelper.isKnownReadOnlyRole(role)
+        let canBeEditableTarget = hasStrongEditabilitySignal && !isKnownReadOnlyRole
+        let nativeSelection =
+            canBeEditableTarget && supportedAttributes.contains(kAXSelectedTextRangeAttribute as String)
             ? AXHelper.rangeValue(for: kAXSelectedTextRangeAttribute as CFString, on: element)
             : nil
+
+        // Chromium/WebKit contenteditables (Gmail body, Slack/Notion/Discord web, ClickUp chat)
+        // expose selection only through the opaque AXTextMarker API, never kAXSelectedTextRange,
+        // so they would otherwise fail the capability gate for a missing selection. Synthesize an
+        // NSRange + caret-windowed text from the markers, but only when the native range is absent.
+        let markerSelection =
+            canBeEditableTarget && nativeSelection == nil
+            ? AXHelper.synthesizeMarkerSelection(
+                on: element, parameterizedAttributes: supportedParameterizedAttributes)
+            : nil
+
+        let nativeTextSelection = nativeSelection.flatMap {
+            nativeTextWindow(
+                on: element,
+                selection: $0,
+                supportedAttributes: supportedAttributes,
+                supportedParameterizedAttributes: supportedParameterizedAttributes
+            )
+        }
+        // Prefer the marker-windowed text when we synthesized one so `selection` (window-relative)
+        // and `textValue` stay consistent; otherwise use a bounded native text window when the host
+        // supports `AXStringForRange`, falling back to the full value for older/native controls.
+        let textSelection = markerSelection.map {
+            AXTextSelection(text: $0.text, selection: $0.selection)
+        } ?? nativeTextSelection
+        let selection = textSelection?.selection
+        let selectionForGeometry = nativeSelection ?? markerSelection?.selection
+        let textValue = textSelection?.text
+
+        if let markerSelection {
+            let textLength = (markerSelection.text as NSString).length
+            let location = markerSelection.selection.location
+            let length = markerSelection.selection.length
+            CotabbyLogger.focus.trace(
+                "CHROME-CONTENTEDITABLE synthesized selection loc=\(location) len=\(length) textLen=\(textLength)")
+        }
+
         var inputFrameRect =
             supportedAttributes.contains("AXFrame")
             ? geometryResolver.resolveInputFrameRect(for: element)
@@ -443,15 +657,21 @@ struct FocusSnapshotResolver {
                 height: currentFrame.height
             )
         }
-        let caretResult = selection.flatMap {
+        let caretResult = selectionForGeometry.flatMap {
             geometryResolver.resolveCaretRect(
                 for: element,
                 selection: $0,
-                supportsBoundsForRange: supportedParameterizedAttributes.contains(
-                    kAXBoundsForRangeParameterizedAttribute as String),
+                // A marker-synthesized selection's location is window-relative, not a document
+                // offset, so NSRange-based BoundsForRange would resolve the wrong caret. Native
+                // selections keep their document offset here, while `textSelection` below carries
+                // the bounded-window offset for text-based geometry fallbacks.
+                supportsBoundsForRange: markerSelection == nil
+                    && supportedParameterizedAttributes.contains(
+                        kAXBoundsForRangeParameterizedAttribute as String),
                 supportsFrame: supportedAttributes.contains("AXFrame"),
                 cocoaAnchorFrame: inputFrameRect,
-                textValue: textValue
+                textValue: textValue,
+                textSelection: selection
             )
         }
         let caretRect = caretResult?.rect
@@ -463,11 +683,9 @@ struct FocusSnapshotResolver {
             elementIdentifier: elementIdentifier,
             role: role,
             subrole: subrole,
-            editableHintScore: AXHelper.editabilityHintScore(
-                role: role, explicitEditableFlag: explicitEditableFlag),
-            hasStrongEditabilitySignal: AXHelper.hasStrongEditabilitySignal(
-                role: role, explicitEditableFlag: explicitEditableFlag),
-            isKnownReadOnlyRole: AXHelper.isKnownReadOnlyRole(role),
+            editableHintScore: editableHintScore,
+            hasStrongEditabilitySignal: hasStrongEditabilitySignal,
+            isKnownReadOnlyRole: isKnownReadOnlyRole,
             hasTextValue: textValue != nil,
             hasSelectionRange: selection != nil,
             hasCaretBounds: caretRect != nil,
@@ -490,6 +708,94 @@ struct FocusSnapshotResolver {
         )
     }
 
+    /// Reads the smallest native text window the host can provide around the current selection.
+    ///
+    /// `AXStringForRange` is the important fast path for large Chrome and WebKit fields: instead of
+    /// pulling the whole `AXValue`, we ask for at most `focusedTextContextWindowUTF16` units before
+    /// and after the caret. Apps that do not expose the parameterized string API still fall back to
+    /// `AXValue`, preserving compatibility.
+    private func nativeTextWindow(
+        on element: AXUIElement,
+        selection: NSRange,
+        supportedAttributes: Set<String>,
+        supportedParameterizedAttributes: Set<String>
+    ) -> AXTextSelection? {
+        func fullTextSelection() -> AXTextSelection? {
+            guard supportedAttributes.contains(kAXValueAttribute as String),
+                  let value = AXHelper.stringValue(for: kAXValueAttribute as CFString, on: element)
+            else {
+                return nil
+            }
+
+            return AXTextSelection(text: value, selection: selection)
+        }
+
+        guard supportedParameterizedAttributes.contains(kAXStringForRangeParameterizedAttribute as String),
+              supportedAttributes.contains(kAXNumberOfCharactersAttribute as String),
+              let rawDocumentLength = AXHelper.intValue(
+                  for: kAXNumberOfCharactersAttribute as CFString,
+                  on: element
+              ),
+              rawDocumentLength >= 0
+        else {
+            return fullTextSelection()
+        }
+
+        let documentLength = rawDocumentLength
+        let safeLocation = min(max(selection.location, 0), documentLength)
+        let requestedEnd = selection.location > Int.max - selection.length
+            ? Int.max
+            : selection.location + selection.length
+        let safeEnd = min(max(requestedEnd, safeLocation), documentLength)
+
+        let beforeLength = min(safeLocation, Self.focusedTextContextWindowUTF16)
+        let beforeStart = safeLocation - beforeLength
+        let afterStart = safeEnd
+        let afterLength = min(max(documentLength - afterStart, 0), Self.focusedTextContextWindowUTF16)
+
+        guard let beforeText = AXHelper.parameterizedStringValue(
+            for: kAXStringForRangeParameterizedAttribute as CFString,
+            range: NSRange(location: beforeStart, length: beforeLength),
+            on: element
+        ) else {
+            return fullTextSelection()
+        }
+
+        let selectedText: String
+        if safeEnd > safeLocation {
+            guard let nativeSelectedText = AXHelper.parameterizedStringValue(
+                for: kAXStringForRangeParameterizedAttribute as CFString,
+                range: NSRange(location: safeLocation, length: safeEnd - safeLocation),
+                on: element
+            ) else {
+                return fullTextSelection()
+            }
+            selectedText = nativeSelectedText
+        } else {
+            selectedText = ""
+        }
+
+        let trailingText: String
+        if afterLength > 0 {
+            trailingText = AXHelper.parameterizedStringValue(
+                for: kAXStringForRangeParameterizedAttribute as CFString,
+                range: NSRange(location: afterStart, length: afterLength),
+                on: element
+            ) ?? ""
+        } else {
+            trailingText = ""
+        }
+
+        let text = beforeText + selectedText + trailingText
+        return AXTextSelection(
+            text: text,
+            selection: NSRange(
+                location: (beforeText as NSString).length,
+                length: (selectedText as NSString).length
+            )
+        )
+    }
+
     /// Detects secure inputs so Cotabby can intentionally refuse to operate in sensitive fields.
     private func isSecureElement(element: AXUIElement, role: String, subrole: String?) -> Bool {
         let secureMarkers = [
@@ -508,8 +814,17 @@ struct FocusSnapshotResolver {
 
     // MARK: - Debug AX tree dump
 
-    private func printAXTreeDump(focusedElement: AXUIElement, app: String, bundle: String) {
-        var out = "\n========== AX TREE DUMP ==========\n"
+    /// Renders the focused element plus its ancestors and children to plain text and overwrites
+    /// `~/Desktop/cotabby-ax-dump.txt`. The file is overwritten so the user (or an AI debugger)
+    /// always inspects the latest snapshot at a stable path. The dump is debounced to one write
+    /// per focused-element identity change (see the call site).
+    ///
+    /// Writes are best-effort: a failed disk write is logged through `CotabbyLogger.focus` and
+    /// does not propagate, since AX dumping is purely diagnostic.
+    private func writeAXTreeDumpToDesktop(focusedElement: AXUIElement, app: String, bundle: String) {
+        let timestamp = Self.dumpTimestampFormatter.string(from: Date())
+        var out = "========== AX TREE DUMP ==========\n"
+        out += "Timestamp: \(timestamp)\n"
         out += "App: \(app) (\(bundle))\n\n"
 
         out += "-- Focused + ancestors --\n"
@@ -529,7 +844,28 @@ struct FocusSnapshotResolver {
         dumpChildrenRecursive(of: focusedElement, into: &out, indent: "", depth: 0)
 
         out += "========== END DUMP ==========\n"
-        CotabbyLogger.focus.debug("\(out)")
+
+        guard let desktopURL = FileManager.default
+            .urls(for: .desktopDirectory, in: .userDomainMask).first else {
+            CotabbyLogger.focus.error("AX dump skipped: no Desktop directory available")
+            return
+        }
+        let targetURL = desktopURL.appendingPathComponent("cotabby-ax-dump.txt", isDirectory: false)
+        do {
+            try out.write(to: targetURL, atomically: true, encoding: .utf8)
+            CotabbyLogger.focus.debug(
+                "Wrote AX dump",
+                metadata: [
+                    "path": .string(targetURL.path),
+                    "bundle": .string(bundle)
+                ]
+            )
+        } catch {
+            CotabbyLogger.focus.error(
+                "Failed to write AX dump: \(error.localizedDescription)",
+                metadata: ["path": .string(targetURL.path)]
+            )
+        }
     }
 
     private func dumpChildrenRecursive(
@@ -648,6 +984,17 @@ final class DeepGeometryWalkThrottle {
         cachedResult = result
         return result
     }
+}
+
+private struct FocusCandidateResolution {
+    let resolvedCandidate: AXFocusCandidate?
+    let diagnosticCandidate: AXFocusCandidate?
+    let resolution: FocusCapabilityResolution
+}
+
+private struct AXTextSelection {
+    let text: String
+    let selection: NSRange
 }
 
 /// AX data read from one candidate element near the current focus.
