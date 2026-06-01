@@ -73,7 +73,7 @@ struct GeneralPaneView: View {
                 Toggle(isOn: clipboardContextEnabledBinding) {
                     SettingsRowLabel(
                         title: "Include Clipboard Context",
-                        description: "Let suggestions reference whatever you most recently copied."
+                        description: "Enable clipboard context for more relevant completions. When enabled, Cotabby reads your clipboard to better understand what you're working on. Clipboard contents are processed locally and are never stored or sent anywhere."
                     )
                 }
 
