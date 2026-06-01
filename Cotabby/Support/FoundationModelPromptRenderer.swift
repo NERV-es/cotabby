@@ -118,15 +118,21 @@ enum FoundationModelPromptRenderer {
 
         if let summary = request.visualContextSummary,
            !summary.isEmpty {
+            // Cap visual context to preserve token budget for prefix text (the primary signal).
+            // Apple nano context is ~4096 tokens ≈ 16K chars total; visual context beyond 800 chars
+            // is diminishing returns for inline completion quality.
+            let cappedSummary = String(summary.prefix(800))
             sections.append("Screen content:")
-            sections.append(summary)
+            sections.append(cappedSummary)
         }
 
         if let clipboardContext = request.clipboardContext,
            !clipboardContext.isEmpty {
+            // Same budget reasoning: clipboard beyond 600 chars rarely helps the immediate continuation.
+            let cappedClipboard = String(clipboardContext.prefix(600))
             sections.append("")
             sections.append("User's clipboard:")
-            sections.append(clipboardContext)
+            sections.append(cappedClipboard)
         }
 
         sections.append(contentsOf: [
