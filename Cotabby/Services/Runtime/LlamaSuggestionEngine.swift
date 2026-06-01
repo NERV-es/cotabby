@@ -53,7 +53,6 @@ final class LlamaSuggestionEngine {
             let treeConfig = treeDecodeConfiguration
             let treeResult = try await runtimeManager.generateTree(
                 prompt: request.prompt,
-                chatPrompt: request.llamaChatPrompt,
                 cachedPrefixBytes: cachedPrefixBytes,
                 options: options,
                 config: treeConfig
