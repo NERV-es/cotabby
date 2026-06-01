@@ -113,7 +113,7 @@ final class ExtendedContextTests: XCTestCase {
             configuration: .standard
         )
 
-        XCTAssertTrue(result.promptPreview.contains("Reference notes from the user:"))
+        XCTAssertTrue(result.promptPreview.contains("Reference notes from the user"))
         XCTAssertTrue(result.promptPreview.contains("RULE: Every other word should be 'meow'"))
     }
 
@@ -129,14 +129,17 @@ final class ExtendedContextTests: XCTestCase {
             extendedContext: "Project codenames: Aurora = the iOS app. Borealis = the macOS app."
         )
 
-        XCTAssertTrue(prompt.contains("Reference notes from the user:"))
+        XCTAssertTrue(prompt.contains("Reference notes from the user"))
         XCTAssertTrue(prompt.contains("Project codenames: Aurora = the iOS app."))
         XCTAssertTrue(prompt.contains("never break the rules above"))
 
-        // Reference notes must follow custom rules, which must themselves follow the base task block.
-        guard let baseRange = prompt.range(of: "Task:"),
-              let rulesRange = prompt.range(of: "Your style preferences:"),
-              let notesRange = prompt.range(of: "Reference notes from the user:")
+        // The renderer is now plain prose with no standalone `Label:` lines (small instruct models
+        // echoed bare labels into ghost text), so anchor the ordering on stable phrases instead of the
+        // old "Task:" / "Your style preferences:" labels. Reference notes must still follow custom
+        // rules, which must themselves follow the base autocomplete instructions.
+        guard let baseRange = prompt.range(of: "You complete partially-typed text"),
+              let rulesRange = prompt.range(of: "honor the user's own writing preferences"),
+              let notesRange = prompt.range(of: "Reference notes from the user")
         else {
             return XCTFail("expected base/rules/notes sections to be present")
         }
@@ -152,7 +155,7 @@ final class ExtendedContextTests: XCTestCase {
             userName: nil
         )
 
-        XCTAssertFalse(prompt.contains("Reference notes from the user:"))
+        XCTAssertFalse(prompt.contains("Reference notes from the user"))
     }
 
     // MARK: - foundation model rendering
