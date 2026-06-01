@@ -120,7 +120,7 @@ extension SuggestionCoordinator {
                     return
                 }
 
-                await apply(result: result, workID: workID)
+                await apply(result: result, requestContext: request.context, workID: workID)
             } catch SuggestionClientError.cancelled {
                 return
             } catch {
@@ -134,7 +134,7 @@ extension SuggestionCoordinator {
     }
 
     /// Promotes a generated result to `ready` only when it is still fresh for the current field.
-    func apply(result: SuggestionResult, workID: UInt64) async {
+    func apply(result: SuggestionResult, requestContext: FocusedInputContext, workID: UInt64) async {
 
         guard workController.isCurrent(workID) else {
 
@@ -170,10 +170,21 @@ extension SuggestionCoordinator {
         lastAcceptedTail = nil
 
         // Generation numbers are our stale-result guard. If the text changed while the model was
-        // thinking, we drop the answer instead of showing a suggestion for old content.
+        // thinking, the answer was generated against an older prefix. Before dropping it, try to
+        // salvage it by trimming the characters the user typed during the race (see
+        // `StaleCompletionReconciler`) and present the remaining tail instead of dropping it.
         guard liveContext.generation == result.generation else {
-
             latestRawModelOutput = SuggestionDebugLogger.debugPreview(result.rawText)
+
+            if let salvage = salvagedStaleCompletion(
+                result: result,
+                requestContext: requestContext,
+                liveContext: liveContext
+            ) {
+                presentSalvagedCompletion(salvage, result: result, liveContext: liveContext, workID: workID)
+                return
+            }
+
             logStage(
                 "stale-drop",
                 workID: workID,
@@ -276,6 +287,67 @@ extension SuggestionCoordinator {
         // word now so rapid Tabbing keeps inserting words across the exhaustion boundary instead of
         // stalling once the previous suggestion ran out. No-op when nothing was queued.
         flushQueuedPostExhaustionAcceptIfNeeded()
+    }
+
+    /// Bridges live and request-time context to the pure salvage rules, applying the context-level
+    /// guardrails the string helper can't see: the result must belong to the same process, the field
+    /// must have no active selection, and the text after the caret must be unchanged. Any of those
+    /// failing means the user did more than type ahead, so the continuation no longer attaches.
+    private func salvagedStaleCompletion(
+        result: SuggestionResult,
+        requestContext: FocusedInputContext,
+        liveContext: FocusedInputContext
+    ) -> StaleCompletionReconciler.Reconciled? {
+        guard liveContext.processIdentifier == requestContext.processIdentifier else {
+            return nil
+        }
+        guard liveContext.selection.length == 0 else {
+            return nil
+        }
+        guard liveContext.trailingText == requestContext.trailingText else {
+            return nil
+        }
+
+        return StaleCompletionReconciler.reconcile(
+            continuation: result.text,
+            prefixAtRequest: requestContext.precedingText,
+            currentPrefix: liveContext.precedingText
+        )
+    }
+
+    /// Promotes a salvaged stale completion to a ready session anchored at the *current* field state.
+    /// Mirrors the fresh-result ready path but stamps the live generation (not the stale one) so the
+    /// session reconciles correctly as the user keeps typing through the recovered tail.
+    private func presentSalvagedCompletion(
+        _ salvage: StaleCompletionReconciler.Reconciled,
+        result: SuggestionResult,
+        liveContext: FocusedInputContext,
+        workID: UInt64
+    ) {
+        latestLatencyMilliseconds = Int(result.latency * 1000)
+        latestGenerationNumber = liveContext.generation
+        let session = interactionState.startSession(
+            fullText: salvage.text,
+            liveContext: liveContext,
+            latency: result.latency
+        )
+        applySessionDiagnostics(session, acceptanceAction: "Salvaged a stale suggestion after type-ahead.")
+        state = .ready(text: session.remainingText, latency: session.latency)
+        presentOverlay(
+            text: session.remainingText,
+            at: liveContext.caretRect,
+            context: liveContext,
+            isRightToLeft: TextDirectionDetector.isRightToLeft(liveContext.precedingText)
+        )
+        logStage(
+            "stale-salvage",
+            workID: workID,
+            generation: liveContext.generation,
+            message: "Salvaged a stale result by trimming \(salvage.typedSinceRequest.count) " +
+                "typed character(s) (\(salvage.confidence.rawValue)).",
+            rawOutput: result.rawText,
+            normalizedOutput: session.remainingText
+        )
     }
 
     /// Converts a runtime or engine failure into visible coordinator state and clears stale UI.

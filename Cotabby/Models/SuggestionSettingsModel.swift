@@ -313,7 +313,6 @@ final class SuggestionSettingsModel: ObservableObject {
             .string(forKey: Self.acceptanceGranularityDefaultsKey)
             .flatMap(AcceptanceGranularity.init(rawValue:))
             ?? .word
-
         isGloballyEnabled = resolvedGloballyEnabled
         disabledAppRules = resolvedDisabledAppRules
         showIndicator = resolvedShowIndicator
@@ -1102,8 +1101,8 @@ extension SuggestionSettingsModel: SuggestionSettingsProviding {
         // `presentationToggles` carries the visual-pipeline knobs (clipboard, fast mode, mirror
         // preference); they share the property of "affects how/when suggestions are shown".
         //
-        // The outer CombineLatest4 is at the cap, so `$acceptanceGranularity` is layered above it
-        // via a second CombineLatest to avoid restructuring the existing groupings.
+        // The outer CombineLatest4 is at the cap, so `$acceptanceGranularity` is layered above it via
+        // a second combiner to avoid restructuring the existing groupings.
         let primary = Publishers.CombineLatest4(
             Publishers.CombineLatest4(
                 $isGloballyEnabled,
