@@ -285,7 +285,11 @@ final class OverlayController: SuggestionOverlayControlling {
     private func targetScreenVisibleFrame(for caretRect: CGRect) -> CGRect {
         let midpoint = CGPoint(x: caretRect.midX, y: caretRect.midY)
 
-        if let screen = NSScreen.screens.first(where: { $0.visibleFrame.contains(midpoint) }) {
+        // Use full frame (not visibleFrame) for ownership — visibleFrame excludes the menu bar
+        // and Dock areas, causing carets near those edges to miss all screens and fall through
+        // to NSScreen.main (wrong display on multi-monitor setups). Once we find the owning
+        // screen, return its visibleFrame for layout clamping. (#261)
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(midpoint) }) {
             return screen.visibleFrame
         }
 

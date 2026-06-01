@@ -98,7 +98,7 @@ final class EmojiPickerPanelController: EmojiPickerPanelPresenting {
 
     private func targetVisibleFrame(for caretRect: CGRect) -> CGRect {
         let midpoint = CGPoint(x: caretRect.midX, y: caretRect.midY)
-        if let screen = NSScreen.screens.first(where: { $0.visibleFrame.contains(midpoint) }) {
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(midpoint) }) {
             return screen.visibleFrame
         }
         if let screen = NSScreen.screens.first(where: { $0.frame.intersects(caretRect) }) {

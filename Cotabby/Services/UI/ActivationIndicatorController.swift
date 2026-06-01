@@ -124,7 +124,7 @@ final class ActivationIndicatorController {
         let midpoint = CGPoint(x: rect.midX, y: rect.midY)
 
         if let containingScreen = NSScreen.screens.first(where: {
-            $0.visibleFrame.contains(midpoint)
+            $0.frame.contains(midpoint)
         }) {
             return containingScreen
         }
