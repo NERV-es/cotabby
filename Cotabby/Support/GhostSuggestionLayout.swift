@@ -33,6 +33,9 @@ struct GhostSuggestionLayout: Equatable {
         static let minimumLineWidth: CGFloat = 48
         static let estimatedKeycapAndSpacingWidth: CGFloat = 36
         static let lineHeightMultiplier: CGFloat = 1.25
+        /// Maximum number of visual lines before truncation. Prevents vertical overflow when
+        /// suggestions are very long or the input field is narrow (forcing aggressive wrapping).
+        static let maximumDisplayLines: Int = 6
     }
 
     static func make(
@@ -130,7 +133,7 @@ struct GhostSuggestionLayout: Equatable {
             startsBelowCaret = true
         }
 
-        while !remainingText.isEmpty {
+        while !remainingText.isEmpty, rawLines.count < Metrics.maximumDisplayLines {
             let split = splitPrefix(
                 from: remainingText,
                 maxWidth: overflowBudget,
@@ -143,6 +146,12 @@ struct GhostSuggestionLayout: Equatable {
 
             rawLines.append((split.line, 0))
             remainingText = split.remainder
+        }
+
+        // If text was truncated, append ellipsis to the last line.
+        if !remainingText.isEmpty, !rawLines.isEmpty {
+            let lastIndex = rawLines.count - 1
+            rawLines[lastIndex] = (rawLines[lastIndex].text + "…", rawLines[lastIndex].leadingIndent)
         }
 
         if rawLines.isEmpty {
