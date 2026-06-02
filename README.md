@@ -45,32 +45,13 @@ Everything runs on-device. No hosted API, no cloud round-trip.
   <a href="https://www.youtube.com/watch?v=p3TIgxQFQGE"><strong>Watch on YouTube →</strong></a>
 </p>
 
-<table align="center" width="100%">
-  <tr>
-    <td align="center" valign="top" width="50%">
-      <img src=".github/assets/readme/demo-email.png" alt="Cotabby autocomplete in Email" width="100%" />
-      <br />
-      <sub><b>Email</b></sub>
-    </td>
-    <td align="center" valign="top" width="50%">
-      <img src="https://github.com/user-attachments/assets/05c04d09-e658-478b-b10e-25c6a0d1b4ee" alt="Cotabby autocomplete in Slack" width="100%" />
-      <br />
-      <sub><b>Slack</b></sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" valign="top" width="50%">
-      <img src="https://github.com/user-attachments/assets/7d16957f-e2bd-487a-9910-757286b445ea" alt="Cotabby autocomplete in Notes" width="100%" />
-      <br />
-      <sub><b>Notes</b></sub>
-    </td>
-    <td align="center" valign="top" width="50%">
-      <img src="https://github.com/user-attachments/assets/407ccd42-b0fb-414d-9bd2-9ce05119777e" alt="Cotabby autocomplete in iMessage" width="100%" />
-      <br />
-      <sub><b>iMessage</b></sub>
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <img width="798" height="326" alt="Cotabby autocomplete demo" src="https://github.com/user-attachments/assets/91d82593-291c-49f8-812e-99e9f239e432" />
+</p>
+
+<p align="center">
+  <img width="798" height="326" alt="Cotabby emoji autocomplete demo" src="https://github.com/user-attachments/assets/c4c6e051-52a5-41fb-84ee-9c668e6f8d04" />
+</p>
 
 ## Features
 
