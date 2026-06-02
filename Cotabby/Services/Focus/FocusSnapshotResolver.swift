@@ -583,7 +583,23 @@ struct FocusSnapshotResolver {
             explicitEditableFlag: explicitEditableFlag
         )
         let isKnownReadOnlyRole = AXHelper.isKnownReadOnlyRole(role)
+        // Authoritative read-only probe for editable-looking roles: a field can expose a readable
+        // text `AXValue` while refusing writes (disabled inputs, read-only <input>/<textarea>,
+        // rendered code viewers). `AXEditable == false` or a non-settable `AXValue` both mean we
+        // must not offer a suggestion there. Only consult this when the role itself looks editable
+        // (known read-only roles are already handled) and the host actually exposes a text value,
+        // and treat an unknown settable answer (`nil`) as "not read-only" to avoid false negatives.
+        let isExplicitlyReadOnly: Bool = {
+            guard hasStrongEditabilitySignal, !isKnownReadOnlyRole else { return false }
+            if explicitEditableFlag == false { return true }
+            guard supportedAttributes.contains(kAXValueAttribute as String) else { return false }
+            if AXHelper.isAttributeSettable(kAXValueAttribute as CFString, on: element) == false {
+                return true
+            }
+            return false
+        }()
         let canBeEditableTarget = hasStrongEditabilitySignal && !isKnownReadOnlyRole
+            && !isExplicitlyReadOnly
         let nativeSelection =
             canBeEditableTarget && supportedAttributes.contains(kAXSelectedTextRangeAttribute as String)
             ? AXHelper.rangeValue(for: kAXSelectedTextRangeAttribute as CFString, on: element)
@@ -685,7 +701,7 @@ struct FocusSnapshotResolver {
             subrole: subrole,
             editableHintScore: editableHintScore,
             hasStrongEditabilitySignal: hasStrongEditabilitySignal,
-            isKnownReadOnlyRole: isKnownReadOnlyRole,
+            isKnownReadOnlyRole: isKnownReadOnlyRole || isExplicitlyReadOnly,
             hasTextValue: textValue != nil,
             hasSelectionRange: selection != nil,
             hasCaretBounds: caretRect != nil,

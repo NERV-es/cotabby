@@ -106,6 +106,19 @@ enum AXHelper {
         return number.intValue
     }
 
+    /// Reports whether the host app advertises `attribute` as writable for `element`.
+    ///
+    /// This is the authoritative read-only signal: a field that exposes a text `AXValue` we can read
+    /// but cannot write (disabled inputs, read-only `<input>`/`<textarea>`, rendered code viewers)
+    /// returns `false` here even though its role looks editable. Returns `nil` when the host does not
+    /// answer the settable query, so callers can distinguish "explicitly read-only" from "unknown".
+    static func isAttributeSettable(_ attribute: CFString, on element: AXUIElement) -> Bool? {
+        var settable: DarwinBoolean = false
+        let result = AXUIElementIsAttributeSettable(element, attribute, &settable)
+        guard result == .success else { return nil }
+        return settable.boolValue
+    }
+
     /// Converts loosely typed Accessibility values into `AXValue` only after verifying the Core
     /// Foundation type id. This keeps the unsafe CF boundary in one place and avoids force casts in
     /// the higher-level helpers below.
