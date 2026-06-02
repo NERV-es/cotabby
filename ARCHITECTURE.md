@@ -87,7 +87,7 @@ The local model runtime is intentionally split:
 
 That split matters because runtime lifecycle concerns change at a different rate than prompt strategy or output cleanup.
 
-The constrained decoder, beam search, and fill-in-middle prompting ship behind default-off developer flags. See [docs/EVALUATING_THE_DECODER.md](docs/EVALUATING_THE_DECODER.md) for how to enable each path on device and read acceptance rate and suppression reasons from the logs before promoting one to the default.
+The constrained decoder, beam search, and fill-in-middle prompting ship behind default-off developer flags.
 
 ## Safe Change Order
 
