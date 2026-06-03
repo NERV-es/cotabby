@@ -1,0 +1,414 @@
+# Instincts generated from https://github.com/arbitraged-life/cotabby
+# Generated: 2026-06-03T15:06:06.363Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: cotabby-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/cotabby
+---
+
+# Cotabby Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: ci
+
+## Evidence
+
+- 1 commits analyzed
+- Detected conventional commit pattern
+- Examples: ci: add zero-config security & automation workflows
+
+---
+id: cotabby-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/cotabby
+---
+
+# Cotabby Commit Length
+
+## Action
+
+Write moderate-length commit messages (~51 characters)
+
+## Evidence
+
+- Average commit message length: 51 chars
+- Based on 1 commits
+
+---
+id: cotabby-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/cotabby
+---
+
+# Cotabby Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: cotabby-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/cotabby
+---
+
+# Cotabby Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: cotabby-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/cotabby
+---
+
+# Cotabby Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: cotabby-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/cotabby
+---
+
+# Cotabby Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: cotabby-instinct-file-naming
+trigger: "When creating a new file in the codebase"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct File Naming
+
+## Action
+
+Name the file using camelCase
+
+## Evidence
+
+- Pattern in namingConventions.files
+
+---
+id: cotabby-instinct-function-naming
+trigger: "When defining a new function"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct Function Naming
+
+## Action
+
+Use camelCase for the function name
+
+## Evidence
+
+- Pattern in namingConventions.functions
+
+---
+id: cotabby-instinct-class-naming
+trigger: "When defining a new class"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct Class Naming
+
+## Action
+
+Use PascalCase for the class name
+
+## Evidence
+
+- Pattern in namingConventions.classes
+
+---
+id: cotabby-instinct-constant-naming
+trigger: "When defining a constant"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct Constant Naming
+
+## Action
+
+Use SCREAMING_SNAKE_CASE for the constant name
+
+## Evidence
+
+- Pattern in namingConventions.constants
+
+---
+id: cotabby-instinct-import-style
+trigger: "When importing modules"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct Import Style
+
+## Action
+
+Use relative import paths
+
+## Evidence
+
+- Pattern in importStyle
+
+---
+id: cotabby-instinct-export-style
+trigger: "When exporting from a module"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct Export Style
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in exportStyle
+
+---
+id: cotabby-instinct-test-location
+trigger: "When adding or updating tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct Test Location
+
+## Action
+
+Place test files in a separate directory from source files
+
+## Evidence
+
+- Pattern in architecture.folderStructure.testLocation
+
+---
+id: cotabby-instinct-commit-format
+trigger: "When writing a commit message"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct Commit Format
+
+## Action
+
+Use conventional commit format with a type prefix (e.g., 'ci: ')
+
+## Evidence
+
+- Pattern in commits.type
+- Examples like 'ci: add zero-config security & automation workflows'
+
+---
+id: cotabby-instinct-ci-workflow
+trigger: "When configuring or updating CI/CD processes"
+confidence: 0.8
+domain: workflow
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct Ci Workflow
+
+## Action
+
+Add or modify workflows in '.github/workflows/' using YAML files
+
+## Evidence
+
+- Presence of multiple workflow YAML files in .github/workflows/
+- ConfigFiles: .github/workflows/ci-optimizer.yml, etc.
+
+---
+id: cotabby-instinct-auto-approve-workflow
+trigger: "When automating PR approvals"
+confidence: 0.8
+domain: workflow
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct Auto Approve Workflow
+
+## Action
+
+Use or update '.github/workflows/auto-approve.yml' for auto-approval logic
+
+## Evidence
+
+- .github/workflows/auto-approve.yml present in configFiles
+
+---
+id: cotabby-instinct-semantic-pr-workflow
+trigger: "When enforcing semantic PR titles"
+confidence: 0.8
+domain: workflow
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct Semantic Pr Workflow
+
+## Action
+
+Use or update '.github/workflows/semantic-pr.yml' to check PR title conventions
+
+## Evidence
+
+- .github/workflows/semantic-pr.yml present in configFiles
+
+---
+id: cotabby-instinct-stale-workflow
+trigger: "When managing stale issues or PRs"
+confidence: 0.8
+domain: workflow
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct Stale Workflow
+
+## Action
+
+Use or update '.github/workflows/stale.yml' to automate stale labeling and closing
+
+## Evidence
+
+- .github/workflows/stale.yml present in configFiles
+
+---
+id: cotabby-instinct-typos-workflow
+trigger: "When checking for spelling errors in the repository"
+confidence: 0.8
+domain: workflow
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct Typos Workflow
+
+## Action
+
+Use or update '.github/workflows/typos.yml' to automate typo detection
+
+## Evidence
+
+- .github/workflows/typos.yml present in configFiles
+
+---
+id: cotabby-instinct-repo-visualizer-workflow
+trigger: "When visualizing repository structure or metrics"
+confidence: 0.8
+domain: workflow
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct Repo Visualizer Workflow
+
+## Action
+
+Use or update '.github/workflows/repo-visualizer.yml' for repo visualization tasks
+
+## Evidence
+
+- .github/workflows/repo-visualizer.yml present in configFiles
+
+---
+id: cotabby-instinct-pipelock-workflow
+trigger: "When managing pipeline locking or concurrency"
+confidence: 0.8
+domain: workflow
+source: repo-analysis
+source_repo: arbitraged-life/cotabby
+---
+
+# Cotabby Instinct Pipelock Workflow
+
+## Action
+
+Use or update '.github/workflows/pipelock.yml' to control workflow concurrency
+
+## Evidence
+
+- .github/workflows/pipelock.yml present in configFiles
+
