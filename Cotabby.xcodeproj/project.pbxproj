@@ -20,6 +20,7 @@
 		0A3443AEE6540F11E5E6BF8F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3E8E86A14090BC7BD13BA76 /* AppDelegate.swift */; };
 		0A658BF137DBD0898E40B87F /* AcknowledgementsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B7A28471B8526C2693FFF65 /* AcknowledgementsView.swift */; };
 		0AF568AB234033BA2DE4CAA7 /* SuggestionModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 386C98FFCF76EC1C8C7E82BB /* SuggestionModels.swift */; };
+		0B378201616831626DEC3AB6 /* MacroReferenceSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64442042F5B57CB0A701DA85 /* MacroReferenceSheet.swift */; };
 		0B6E28D1CBDF657F71548A3C /* EmojiPickerControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62BD2ADED33249F5BA53D0AD /* EmojiPickerControllerTests.swift */; };
 		0BEBB33EB75B59EE83C6FE44 /* MenuBarPopoverDismisser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44595B534DD7323F0AD60825 /* MenuBarPopoverDismisser.swift */; };
 		0C06CAD62975E87B2C852191 /* ScreenTextExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59E299BE2E9D42A33D5D2F5D /* ScreenTextExtractor.swift */; };
@@ -430,6 +431,7 @@
 		60629DFE309C1A4BD8A7FB3B /* RuntimeBootstrapModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeBootstrapModel.swift; sourceTree = "<group>"; };
 		62BD2ADED33249F5BA53D0AD /* EmojiPickerControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiPickerControllerTests.swift; sourceTree = "<group>"; };
 		62EDF1199CC5E18BD7651661 /* EmojiPickerPanelLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiPickerPanelLayout.swift; sourceTree = "<group>"; };
+		64442042F5B57CB0A701DA85 /* MacroReferenceSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacroReferenceSheet.swift; sourceTree = "<group>"; };
 		656F58E56FE9BC087B6F1D33 /* PermissionReminderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionReminderView.swift; sourceTree = "<group>"; };
 		671689F289D45A124639C9C6 /* EmojiRecentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiRecentsTests.swift; sourceTree = "<group>"; };
 		67586807ACE8EB13C9014535 /* TickMarkSlider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TickMarkSlider.swift; sourceTree = "<group>"; };
@@ -986,6 +988,7 @@
 				033A468451259A3214EECBE5 /* InlinePreviewView.swift */,
 				5A567677424A82D9EEF47495 /* KeyRecorderView.swift */,
 				9A7CDA90E128350BFF1A9D66 /* LanguageTagsEditor.swift */,
+				64442042F5B57CB0A701DA85 /* MacroReferenceSheet.swift */,
 				44595B534DD7323F0AD60825 /* MenuBarPopoverDismisser.swift */,
 				00824BDD8D0E9B3063827C78 /* MenuBarPresentationObserver.swift */,
 				83A810F9D28A18BA6F2066C7 /* MenuBarSections.swift */,
@@ -1363,6 +1366,7 @@
 				DE5879DCB3223CF67C9F399A /* MacroController.swift in Sources */,
 				2EDFE6F33018D2D43D5CB813 /* MacroEngine.swift in Sources */,
 				BBBD7B4628BA1160DD6B4BDB /* MacroModels.swift in Sources */,
+				0B378201616831626DEC3AB6 /* MacroReferenceSheet.swift in Sources */,
 				3FF6B7DE34A01C4AB7FA54E3 /* MacroTriggerStateMachine.swift in Sources */,
 				5C119807B84F84B0B1B1C2D5 /* MarkerSelectionSynthesizer.swift in Sources */,
 				0BEBB33EB75B59EE83C6FE44 /* MenuBarPopoverDismisser.swift in Sources */,

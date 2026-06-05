@@ -27,6 +27,9 @@ import SwiftUI
 /// the entire time the Settings window sits on Home.
 struct OnboardingFeatureShowcase: View {
     var autoplay: Bool = true
+    /// Shows a "View all" affordance on the macro card that opens a full reference sheet. Off during
+    /// onboarding (keeps that flow uncluttered) and on in Home so users can discover every macro.
+    var showsMacroReference: Bool = false
 
     @State private var isHovering = false
 
@@ -37,7 +40,7 @@ struct OnboardingFeatureShowcase: View {
             GhostTextDemoCard(animating: animating)
             AutocorrectDemoCard(animating: animating)
             EmojiPickerDemoCard(animating: animating)
-            MacroDemoCard(animating: animating)
+            MacroDemoCard(animating: animating, showsReferenceButton: showsMacroReference)
         }
         .onHover { isHovering = $0 }
         // Purely decorative looping demo: hide it from VoiceOver so the
@@ -499,6 +502,7 @@ private struct DemoEmojiKeycap: View {
 /// example with no cycling.
 private struct MacroDemoCard: View {
     let animating: Bool
+    var showsReferenceButton: Bool = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Index of the currently shown example; advances round-robin while visible.
@@ -506,6 +510,7 @@ private struct MacroDemoCard: View {
     /// Real, engine-computed examples, one per (category, input). Built once when the card is created
     /// (rather than in `.task`) so the card is never momentarily empty before its first render.
     @State private var examples: [Example] = MacroDemoCard.buildExamples()
+    @State private var isShowingReference = false
 
     private struct Example: Identifiable {
         let category: String
@@ -541,11 +546,25 @@ private struct MacroDemoCard: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
+
+                if showsReferenceButton {
+                    Button {
+                        isShowingReference = true
+                    } label: {
+                        Label("All macros", systemImage: "list.bullet.rectangle")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                    }
+                    .buttonStyle(.borderless)
+                    .help("See every inline macro and what it does")
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .task(id: [reduceMotion, animating]) {
             await run()
+        }
+        .sheet(isPresented: $isShowingReference) {
+            MacroReferenceSheet(onDismiss: { isShowingReference = false })
         }
     }
 

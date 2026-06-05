@@ -15,7 +15,9 @@ struct HomePaneView: View {
         SettingsPaneScaffold {
             Section { introHeader }
             Section("Support") { supportRow }
-            Section("See it in action") { OnboardingFeatureShowcase(autoplay: false) }
+            Section("See it in action") {
+                OnboardingFeatureShowcase(autoplay: false, showsMacroReference: true)
+            }
         }
     }
 
