@@ -132,6 +132,7 @@ final class WelcomeCoordinator: NSObject, NSWindowDelegate {
                     self?.completeOnboarding()
                 },
                 initialStepIndex: userDefaults.integer(forKey: Self.onboardingProgressStepKey),
+                isReturningUser: userDefaults.integer(forKey: Self.onboardingCompletedVersionKey) > 0,
                 onStepChange: { [weak self] stepIndex in
                     self?.recordProgress(stepIndex: stepIndex)
                 }

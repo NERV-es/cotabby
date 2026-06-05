@@ -27,6 +27,10 @@ struct WelcomeView: View {
     /// Reports the current step's raw index up to the coordinator so it can persist a resume point.
     /// The wizard is re-shown from this step if the user is pulled out before finishing (see #314).
     let onStepChange: (Int) -> Void
+    /// True when this user has completed a prior onboarding version. Custom keeps the user's existing
+    /// settings instead of overwriting them with template defaults, since they have already tuned
+    /// Cotabby and chose Custom precisely to preserve that.
+    let isReturningUser: Bool
 
     @State private var step: WelcomeStep
     @State private var selectedTemplate: OnboardingTemplate?
@@ -54,8 +58,10 @@ struct WelcomeView: View {
         onPreferredWindowSizeChange: @escaping (NSSize) -> Void,
         onDismiss: @escaping () -> Void,
         initialStepIndex: Int = 0,
+        isReturningUser: Bool = false,
         onStepChange: @escaping (Int) -> Void = { _ in }
     ) {
+        self.isReturningUser = isReturningUser
         _permissionManager = ObservedObject(wrappedValue: permissionManager)
         _runtimeModel = ObservedObject(wrappedValue: runtimeModel)
         _modelDownloadManager = ObservedObject(wrappedValue: modelDownloadManager)
@@ -702,6 +708,13 @@ extension WelcomeView {
     /// user's explicit consent to download, so a multi-gigabyte fetch only ever starts from here.
     fileprivate func applyTemplate(_ template: OnboardingTemplate) {
         selectedTemplate = template
+
+        // Returning users picking Custom keep every setting they previously tuned. Skipping the
+        // writes here (and the model download below) preserves their engine, word count, behavior
+        // toggles, and avoids re-triggering a multi-gigabyte fetch they already completed.
+        if template == .custom && isReturningUser {
+            return
+        }
 
         let plan = resolvedPlan(for: template)
         suggestionSettings.selectEngine(plan.engine)
