@@ -18,5 +18,5 @@ permissions:
 jobs:
   resolve:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.label.name == 'upstream-sync' }}
-    uses: NERV-es/.github/.github/workflows/ai-conflict-resolve-reusable.yml@352df8bb78ce44c89c7b963dde316b57279e7999
+    uses: NERV-es/.github/.github/workflows/ai-conflict-resolve-reusable.yml@62b60f00abd929d15fb73801d8c30e9990a0ff9a
     secrets: inherit
